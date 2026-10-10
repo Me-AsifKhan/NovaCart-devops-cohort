@@ -1,0 +1,43 @@
+name: NovaCart Continuous Integration
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate-and-test:
+    name: NovaCart Verification Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out codebase securely
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify frontend structural assets exist
+        run: |
+          test -f novacart/frontend/index.html
+          test -f novacart/frontend/app.js
+          test -f novacart/frontend/styles.css
+
+      - name: Set up Python runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies securely
+        run: |
+          cd novacart/backend
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pytest httpx
+
+      - name: Run automated test suite
+        run: |
+          cd novacart/backend
+          python -m pytest
