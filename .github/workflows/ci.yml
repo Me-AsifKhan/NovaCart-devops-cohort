@@ -35,7 +35,7 @@ jobs:
           cd novacart/backend
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install pytest
+          pip install pytest httpx
 
       - name: Run automated test suite
         run: |
