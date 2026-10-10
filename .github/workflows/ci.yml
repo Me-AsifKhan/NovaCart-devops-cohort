@@ -40,4 +40,4 @@ jobs:
       - name: Run automated test suite
         run: |
           cd novacart/backend
-          pytest
+          python -m pytest
