@@ -1,0 +1,72 @@
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-novacart}
+      POSTGRES_USER: ${POSTGRES_USER:-novacart}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-novacart_local_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  backend:
+    image: novacart-backend:dev
+    build:
+      context: ./novacart/backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-novacart}:${POSTGRES_PASSWORD:-novacart_local_password}@db:5432/${POSTGRES_DB:-novacart}
+      APP_ENV: ${APP_ENV:-development}
+      API_VERSION: ${API_VERSION:-v1}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    expose:
+      - "8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  frontend:
+    image: novacart-frontend:dev
+    build:
+      context: ./novacart/frontend
+    ports:
+      - "${FRONTEND_PORT:-8081}:80"
+    volumes:
+      - ./novacart/frontend/nginx-compose.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - -O
+        - /dev/null
+        - http://127.0.0.1/
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
