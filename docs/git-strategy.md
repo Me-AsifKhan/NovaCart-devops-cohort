@@ -1,7 +1,7 @@
 # NovaCart Git Strategy
 
 ## 1. Chosen Workflow: GitHub Flow
-We use **GitHub Flow** with short-lived feature branches targeting a stable `main` branch. 
+We use **GitHub Flow** with short-lived feature branches targeting a stable `main` branch.
 * **Why it fits:** With 5 developers, heavy frameworks like GitFlow introduce massive merge conflicts and delay releases. GitHub Flow keeps work unblocked and lightweight.
 
 ## 2. How Developers Contribute Changes
@@ -17,7 +17,7 @@ Developers isolate their work and follow a strict, fast sequence:
 The `main` branch represents stable production code. We enforce security configurations on it using modern GitHub Repository Rulesets:
 * **No Direct Pushes:** Direct pushes to `main` are fully blocked for everyone (including admins). All code must go through a PR.
 * **Mandatory Peer Reviews:** Every PR requires at least **1 positive approval** from another teammate. Authors cannot approve their own PRs.
-* **Status Check Gates:** The merge button stays completely locked until our automated `.github/workflows/ci.yml` pipeline (`NovaCart Verification Suite`) passes cleanly. 
+* **Status Check Gates:** The merge button stays completely locked until our automated `.github/workflows/ci.yml` pipeline (`NovaCart Verification Suite`) passes cleanly.
 
 ## 4. How Emergency Fixes are Handled (The Hotfix Path)
 When a critical bug breaches validation and breaks production, we run an accelerated loop:
