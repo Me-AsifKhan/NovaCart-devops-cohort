@@ -1,3 +1,4 @@
+
 name: NovaCart Continuous Integration
 
 on:
@@ -12,32 +13,41 @@ jobs:
   validate-and-test:
     name: NovaCart Verification Suite
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out codebase securely
         uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Verify frontend structural assets exist
+      - name: Verify frontend structural assets
         run: |
+          set -eu
           test -f novacart/frontend/index.html
           test -f novacart/frontend/app.js
           test -f novacart/frontend/styles.css
 
-      - name: Set up Python runtime
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
 
-      - name: Install dependencies securely
+      - name: Install backend dependencies
+        working-directory: novacart/backend
         run: |
-          cd novacart/backend
+          set -eu
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install pytest httpx
+          if [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt
+          fi
+          python -m pip install pytest httpx
 
-      - name: Run automated test suite
-        run: |
-          cd novacart/backend
-          python -m pytest
+      - name: Run backend tests
+        working-directory: novacart/backend
+        run: python -m pytest -v
+
+      - name: Build backend container image
+        run: docker build -t novacart-backend:ci ./novacart/backend
+
+      - name: Build frontend container image
+        run: docker build -t novacart-frontend:ci ./novacart/frontend
