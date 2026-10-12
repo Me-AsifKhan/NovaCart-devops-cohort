@@ -98,7 +98,7 @@ The application currently documents `/health` and `/ready` health endpoints. Con
 
   `postgresql://<app-user>:<url-encoded-password>@<server>.postgres.database.azure.com:5432/<database>?sslmode=require`
 
-- Keep TLS enabled. Prefer `sslmode=verify-full) after confirming the Python driver, trusted CA, and hostname validation setup. Do not disable TLS to bypass errors.
+- Keep TLS enabled. Prefer `sslmode=verify-full` after confirming the Python driver, trusted CA, and hostname validation setup. Do not disable TLS to bypass errors.
 - Store the connection value as a Container Apps secret and reference it in backend environment configuration. Evaluate Key Vault and Microsoft Entra database authentication for production if supported by the chosen driver and deployment model.
 - Use a dedicated database and least-privilege app role, not the server administrator account for normal queries.
 - The frontend must never receive database credentials or `DATABASE_URL`.
@@ -182,7 +182,7 @@ Terraform should:
 
 - Frontend is Nginx on port 80; backend is FastAPI/Uvicorn on port 8080.
 - Both Container Apps share one ACA environment.
-- Frontend API requests use relative `/api/*) paths and Nginx reverse proxying.
+- Frontend API requests use relative `/api/*` paths and Nginx reverse proxying.
 - Backend uses `DATABASE_URL` to connect to Azure PostgreSQL, replacing local Compose's `db:5432` and any SQLite default.
 - Frontend uses external HTTPS ingress; backend uses internal ingress.
 - Development PostgreSQL uses public access plus a restricted firewall; private networking is out of scope here.
