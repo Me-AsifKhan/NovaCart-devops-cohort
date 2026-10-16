@@ -1,0 +1,106 @@
+variable "subscription_id" {
+  description = "Azure subscription ID. Supply through TF_VAR_subscription_id."
+  type        = string
+  sensitive   = true
+}
+
+variable "location" {
+  description = "Azure region for development resources."
+  type        = string
+  default     = "eastus2"
+}
+
+variable "name_prefix" {
+  description = "Short name prefix for NovaCart development resources."
+  type        = string
+  default     = "novacart-dev"
+}
+
+variable "acr_name" {
+  description = "Globally unique ACR name containing only letters and numbers."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-zA-Z0-9]{5,50}$", var.acr_name))
+    error_message = "acr_name must contain 5-50 alphanumeric characters."
+  }
+}
+
+variable "postgres_server_name" {
+  description = "Globally unique lowercase PostgreSQL server name."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]{1,61}[a-z0-9])$", var.postgres_server_name))
+    error_message = "Use 3-63 lowercase letters, numbers, or hyphens."
+  }
+}
+
+variable "db_admin_username" {
+  description = "Administrator username for the development database server."
+  type        = string
+  default     = "novacartadmin"
+}
+
+variable "db_admin_password" {
+  description = "Development PostgreSQL administrator password; supply securely through TF_VAR_db_admin_password."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.db_admin_password) >= 16
+    error_message = "Use a unique password with at least 16 characters."
+  }
+}
+
+variable "database_name" {
+  description = "Name of the NovaCart development database."
+  type        = string
+  default     = "novacart"
+}
+
+variable "dev_client_ip" {
+  description = "Optional single public IPv4 address permitted to connect to PostgreSQL. Leave null until approved."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.dev_client_ip == null || (can(regex("^[0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}[.][0-9]{1,3}$", var.dev_client_ip)) && can(cidrhost("${var.dev_client_ip}/32", 0)))
+    error_message = "dev_client_ip must be a valid IPv4 address or null."
+  }
+}
+
+variable "postgres_sku_name" {
+  description = "PostgreSQL Flexible Server compute SKU; confirm regional availability and current price before deployment."
+  type        = string
+  default     = "B_Standard_B1ms"
+}
+
+variable "postgres_storage_mb" {
+  description = "PostgreSQL storage size in MB."
+  type        = number
+  default     = 32768
+}
+
+variable "log_retention_days" {
+  description = "Log Analytics retention in days."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.log_retention_days >= 30 && var.log_retention_days <= 730
+    error_message = "Retention must be between 30 and 730 days."
+  }
+}
+
+variable "tags" {
+  description = "Common resource tags."
+  type        = map(string)
+  default = {
+    application = "NovaCart"
+    environment = "development"
+    managed_by  = "Terraform"
+    ticket      = "DEVOPS-008"
+  }
+}
