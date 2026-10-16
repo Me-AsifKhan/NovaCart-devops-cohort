@@ -104,3 +104,49 @@ variable "tags" {
     ticket      = "DEVOPS-008"
   }
 }
+
+variable "deploy_application" {
+  description = "Deploy frontend and backend Container Apps after their images have been pushed to ACR."
+  type        = bool
+  default     = false
+}
+
+variable "enable_private_database" {
+  description = "Use VNet-integrated Container Apps and private PostgreSQL networking (DEVOPS-011). Enabling this replaces networking resources and may replace PostgreSQL."
+  type        = bool
+  default     = false
+}
+
+variable "backend_image_tag" {
+  description = "Existing backend image tag in ACR."
+  type        = string
+  default     = "devops-009"
+}
+
+variable "frontend_image_tag" {
+  description = "Existing frontend image tag in ACR."
+  type        = string
+  default     = "devops-009"
+}
+
+variable "container_cpu" {
+  description = "CPU allocation per app container in vCPU."
+  type        = number
+  default     = 0.5
+  validation {
+    condition     = var.container_cpu >= 0.25 && var.container_cpu <= 2
+    error_message = "container_cpu must be between 0.25 and 2 vCPU."
+  }
+}
+
+variable "container_memory" {
+  description = "Memory allocation per app container."
+  type        = string
+  default     = "1Gi"
+}
+
+variable "app_environment" {
+  description = "Application environment name."
+  type        = string
+  default     = "development"
+}

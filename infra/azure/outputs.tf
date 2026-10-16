@@ -37,3 +37,18 @@ output "postgresql_database_name" {
   description = "Development database name."
   value       = azurerm_postgresql_flexible_server_database.this.name
 }
+
+output "frontend_url" {
+  description = "Public frontend URL; null until deploy_application is enabled."
+  value       = var.deploy_application ? "https://${azurerm_container_app.frontend[0].ingress[0].fqdn}" : null
+}
+
+output "backend_internal_fqdn" {
+  description = "Internal backend FQDN; null until deploy_application is enabled."
+  value       = var.deploy_application ? azurerm_container_app.backend[0].ingress[0].fqdn : null
+}
+
+output "private_database_enabled" {
+  description = "Whether the DEVOPS-011 private database network mode is enabled."
+  value       = var.enable_private_database
+}

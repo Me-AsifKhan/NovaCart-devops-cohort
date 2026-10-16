@@ -1,63 +1,24 @@
-# NovaCart Azure development baseline — DEVOPS-008
+# NovaCart Azure infrastructure
 
-This directory defines the Azure development platform only. It does not deploy
-the NovaCart frontend or backend application containers.
+This Terraform configuration evolves through DEVOPS-008 (platform baseline), DEVOPS-009 (application containers), DEVOPS-010 (reproducibility), and DEVOPS-011 (private PostgreSQL connectivity).
 
-## Resources
+## Prerequisites and secrets
 
-- Resource group and Log Analytics workspace
-- Azure Container Registry with admin access disabled
-- User-assigned managed identity and ACR pull role assignment
-- Azure Container Apps environment
-- Public-network Azure Database for PostgreSQL Flexible Server and database
-- Optional single-IP PostgreSQL firewall rule
+Use Terraform >= 1.5.0, the pinned AzureRM provider, Docker, Azure CLI, an active subscription, and permissions for the requested resources and role assignments. Provide `TF_VAR_subscription_id` and `TF_VAR_db_admin_password` through environment variables. Never commit credentials, secret tfvars, state, or saved plans.
 
-## Prerequisites
+## Recommended workflow
 
-- Terraform >= 1.5.0
-- Azure CLI authenticated to the intended tenant
-- An active Azure subscription with permission to create resources and role assignments
-- Globally unique ACR and PostgreSQL server names
+1. Set non-secret environment values in a reviewed `terraform.tfvars` created from the example.
+2. Run `terraform fmt -recursive`, `terraform init -backend=false`, `terraform validate`, and inspect `terraform plan`.
+3. Keep `deploy_application=false` for the first apply so Terraform can create the resource group, ACR, identity, Container Apps environment, logging, and database.
+4. Build and push the frontend/backend images to ACR.
+5. Set `TF_VAR_deploy_application=true`, review the second plan, and apply to create the Container Apps.
+6. Follow `docs/azure-dev-deployment.md` for the detailed deployment and live verification procedure.
+7. Review `docs/terraform-reproducibility.md` before extending the module.
+8. Review `docs/private-database-connectivity.md` before setting `enable_private_database=true`; private mode can replace networking and PostgreSQL resources and requires a migration plan.
 
-## Configure credentials securely
+## Security and cost
 
-Supply the subscription ID and database administrator password through
-environment variables, not committed files:
+ACR admin access is disabled; Container Apps use managed identity for image pulls. PostgreSQL uses TLS in the application connection string. Public development mode permits only explicitly created single-IP firewall rules, including backend egress addresses. Private mode disables public database access and uses VNet/private DNS. Terraform state still contains sensitive values and needs protected remote storage for team use.
 
-PowerShell example (use your own values):
-
-    $env:TF_VAR_subscription_id = "<subscription-id>"
-    $env:TF_VAR_db_admin_password = "<unique-strong-password>"
-
-Do not paste credentials into tickets, source files, shell transcripts, or Git.
-Unset the variables when finished:
-
-    Remove-Item Env:TF_VAR_subscription_id -ErrorAction SilentlyContinue
-    Remove-Item Env:TF_VAR_db_admin_password -ErrorAction SilentlyContinue
-
-## Validate locally
-
-From this directory:
-
-    terraform fmt -recursive
-    terraform init -backend=false
-    terraform validate
-
-A successful local validation does not prove that Azure resources can be
-created. A subscription, permissions, unique names, regional SKU availability,
-and service-specific policies must be checked before deployment.
-
-## Cost and security notes
-
-- Review the Azure Pricing Calculator and subscription budget before applying.
-- PostgreSQL public network access is enabled for the development baseline.
-  No broad firewall rule is created. Set dev_client_ip only for an approved
-  single client IP; later application connectivity requires a separately
-  verified, narrowly scoped approach.
-- The database administrator password is marked sensitive.
-  Never output it or commit it. Treat Terraform state and saved plans as
-  sensitive too.
-- No remote backend is configured here. Before a shared deployment, configure
-  a secured remote backend with access control, state locking and recovery
-  safeguards.
-- DEVOPS-009 is responsible for deploying the application containers.
+Review regional SKU availability, Azure Pricing Calculator estimates, quotas, role permissions, and the full Terraform plan before applying. Budget alerts are not spending caps. No cloud deployment or live verification is claimed by local Terraform validation alone.
