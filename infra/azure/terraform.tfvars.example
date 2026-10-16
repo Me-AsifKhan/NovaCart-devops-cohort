@@ -1,0 +1,22 @@
+# Example only — copy to terraform.tfvars only after reviewing all values.
+# Do not put passwords, tokens, or other secrets in this file.
+
+location            = "eastus2"
+name_prefix         = "novacart-dev"
+acr_name            = "replacewithuniqueacrname123"
+postgres_server_name = "replace-with-unique-pg-name"
+db_admin_username   = "novacartadmin"
+database_name       = "novacart"
+postgres_sku_name   = "B_Standard_B1ms"
+postgres_storage_mb = 32768
+log_retention_days  = 30
+
+# Set only to an approved public IPv4 address.
+# dev_client_ip = "203.0.113.10"
+
+tags = {
+  application = "NovaCart"
+  environment = "development"
+  managed_by  = "Terraform"
+  ticket      = "DEVOPS-008"
+}

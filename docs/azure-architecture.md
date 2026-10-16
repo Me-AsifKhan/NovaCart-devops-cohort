@@ -35,12 +35,10 @@ Region, naming, SKUs, budget, retention, availability requirements, and subscrip
 
 ```text
 GitHub Actions -- OIDC identity with push permission --> Azure Container Registry
-                                                           ^
-                                                           | image pull using managed identity
+                                                           ^ image pull using managed identity
                                                            |
 Browser -- HTTPS --> Frontend Container App (Nginx :80)
-                           |
-                           | /api/* reverse proxy inside ACA environment
+                           | /api/* reverse proxy
                            v
                     Backend Container App (internal, :8080)
                            |
