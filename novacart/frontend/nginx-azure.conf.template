@@ -1,3 +1,4 @@
+
 server {
     listen 80;
     server_name _;
@@ -12,6 +13,7 @@ server {
     location = /api/ready {
         proxy_pass http://${BACKEND_FQDN}/ready;
     }
+
     location /api/ {
         proxy_pass http://${BACKEND_FQDN}/api/;
         proxy_http_version 1.1;
