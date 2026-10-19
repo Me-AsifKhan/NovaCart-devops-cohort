@@ -5,6 +5,13 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    location = /api/health {
+        proxy_pass http://${BACKEND_FQDN}/health;
+    }
+
+    location = /api/ready {
+        proxy_pass http://${BACKEND_FQDN}/ready;
+    }
     location /api/ {
         proxy_pass http://${BACKEND_FQDN}/api/;
         proxy_http_version 1.1;

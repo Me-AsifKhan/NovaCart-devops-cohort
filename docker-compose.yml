@@ -45,6 +45,7 @@ services:
     restart: unless-stopped
 
   frontend:
+    entrypoint: ["nginx", "-g", "daemon off;"]
     image: novacart-frontend:dev
     build:
       context: ./novacart/frontend
