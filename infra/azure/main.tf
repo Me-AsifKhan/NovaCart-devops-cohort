@@ -42,7 +42,7 @@ resource "azurerm_container_app_environment" "this" {
   resource_group_name            = azurerm_resource_group.this.name
   log_analytics_workspace_id     = azurerm_log_analytics_workspace.this.id
   infrastructure_subnet_id       = var.enable_private_database ? azurerm_subnet.container_apps[0].id : null
-  internal_load_balancer_enabled = false
+  internal_load_balancer_enabled = var.enable_private_database ? true : null
 
   workload_profile {
     name                  = "Consumption"
