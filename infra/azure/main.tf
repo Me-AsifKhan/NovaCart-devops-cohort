@@ -283,7 +283,7 @@ resource "azurerm_container_app" "frontend" {
 # of individual firewall objects. It is not a production-safe boundary; DEVOPS-011
 # replaces public PostgreSQL access with private networking.
 resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_azure_services" {
-  count = var.deploy_application && !var.enable_private_database ? 1 : 0
+  count            = var.deploy_application && !var.enable_private_database ? 1 : 0
 
   name             = "allow-azure-services-dev"
   server_id        = azurerm_postgresql_flexible_server.this.id
