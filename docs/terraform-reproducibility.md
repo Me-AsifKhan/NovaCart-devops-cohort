@@ -1,58 +1,78 @@
 # Terraform reproducibility and maintenance — DEVOPS-010
 
-## Structure
+## File layout
 
-- `versions.tf`: Terraform/provider version constraints.
+All files under `infra/azure/` remain in **one Terraform root module**. Splitting resources across files is only for readability; it does not create child modules or change Terraform resource addresses.
+
+- `versions.tf`: Terraform and AzureRM provider version constraints.
 - `providers.tf`: AzureRM provider configuration and subscription selection.
-- `variables.tf`: configurable region, unique names, credentials, sizing, image tags, and deployment/network feature flags.
-- `main.tf`: Azure resources and dependencies.
-- `outputs.tf`: useful resource identifiers and application endpoints.
-- `terraform.tfvars.example`: non-secret example values only.
-- `.terraform.lock.hcl`: provider selections and checksums; commit it.
+- `variables.tf`: inputs, descriptions, types, validation, and safe defaults.
+- `main.tf`: resource group, Log Analytics, ACR, identity, role assignment, and Container Apps environment.
+- `postgresql.tf`: PostgreSQL server/database and public-development firewall configuration.
+- `networking.tf`: optional VNet, subnets, private DNS zone, and DNS link for DEVOPS-011.
+- `container_apps.tf`: optional frontend and backend Container Apps.
+- `outputs.tf`: useful, non-secret IDs, hostnames, region, and application URL.
+- `terraform.tfvars.example`: example non-secret settings; copy locally to `terraform.tfvars` and replace placeholders before use.
+- `.terraform.lock.hcl`: selected provider versions/checksums; commit this file and change it only through a reviewed provider update.
 
-## Values to configure per environment
+These files all share the same variables, provider, locals, and state. Do not add modules, separate environment directories, or a remote backend as part of this ticket unless the team explicitly needs them; those are separate design decisions.
 
-| Value | Per-environment guidance |
+## Environment-specific versus stable values
+
+| Value | Guidance |
 |---|---|
-| `subscription_id` | Required; provide via `TF_VAR_subscription_id` |
-| `location` | Choose a supported region and check service/SKU availability |
-| `acr_name` | Globally unique alphanumeric name |
-| `postgres_server_name` | Globally unique lowercase name meeting Azure naming rules |
-| `db_admin_password` | Unique secret, via `TF_VAR_db_admin_password`; never commit |
-| `postgres_sku_name`, `postgres_storage_mb` | Choose after capacity, availability, and price review |
-| `log_retention_days` | Set to operational and compliance requirements |
-| `deploy_application` | Keep false for the initial base apply; set true after images are pushed |
-| `backend_image_tag`, `frontend_image_tag` | Pin to a known image tag; avoid mutable `latest` in shared environments |
-| `enable_private_database` | DEVOPS-011 networking mode; review replacement and data-migration implications first |
+| `subscription_id` | Required. Set as `TF_VAR_subscription_id` for the target subscription. |
+| `location` | Set per environment and verify service/SKU availability. Current DEV default is `centralindia`. |
+| `acr_name`, `postgres_server_name` | Must be unique in Azure and satisfy the input validations. |
+| `db_admin_password` | Sensitive input via `TF_VAR_db_admin_password`; never place a real value in Git or share Terraform state. |
+| `postgres_sku_name`, `postgres_storage_mb`, `log_retention_days` | Choose according to region, required capacity, retention, and reviewed cost. |
+| `backend_image_tag`, `frontend_image_tag` | Must match images already pushed to ACR. Use clear versioned tags; avoid `latest` for repeatable deployments. |
+| `deploy_application` | `false` for the platform-only phase; `true` when the required images exist. |
+| `enable_private_database` | DEVOPS-011 feature flag. A mode change can replace networking and PostgreSQL resources; never toggle it without inspecting the plan and protecting data. |
+| `name_prefix`, `database_name`, `app_environment`, `tags` | Prefer stable, reviewed naming conventions. Change only when the intended environment or resource identity changes. |
+| PostgreSQL zone and resource names | Currently defined in Terraform as design defaults; review region/SKU support before changing them. |
 
-Stable conventions: resource names derive from `name_prefix`; common tags identify application, environment, manager, and ticket. Provider version constraints and lock file should change only through a reviewed provider-upgrade workflow.
+The example file contains placeholders and no real subscription ID, password, state, or plan. Do not commit the real local `terraform.tfvars`, `.tfstate`, saved plan, `.env`, tokens, or passwords.
 
-## Checks before every apply
+## Repeatable validation workflow
 
-Run from `infra/azure`:
+Run from the repository root in PowerShell. Docker Desktop is **not required** for Terraform formatting or validation.
+
 ```powershell
-terraform fmt -recursive
-terraform init -backend=false
-terraform validate
-terraform plan -out review.tfplan
-terraform show review.tfplan
+terraform -chdir=infra/azure fmt -check -recursive
+terraform -chdir=infra/azure init -backend=false
+terraform -chdir=infra/azure validate
+terraform -chdir=infra/azure plan -input=false -out=review.tfplan
+terraform -chdir=infra/azure show review.tfplan
 ```
-For a shared deployment, configure a secure remote backend with access control, locking, versioning/recovery, and documented ownership before applying. Do not treat a local state file or saved plan as safe to share; both may contain sensitive values. Keep state, plans, `.terraform/`, and secret tfvars out of Git.
 
-Review every replacement/deletion, public network change, role assignment, firewall rule, SKU, region, and estimated cost. Confirm the active subscription and permissions before apply. Local validation does not prove cloud API permissions, quotas, regional availability, image availability, or live application health.
+Set required variables securely in the current shell before planning. If a plan uses local Terraform state, it must be protected just like a saved plan because sensitive values may be present. Remove the local plan file after review when it is no longer needed:
+```powershell
+Remove-Item .\infra\azure\review.tfplan -Force -ErrorAction SilentlyContinue
+```
 
-## Safe extension conventions
+Review the complete plan before applying. Specifically check:
+- active subscription, region, image tags, resource names, and estimated spend;
+- every replacement/deletion, especially PostgreSQL and the Container Apps environment;
+- public/private database access, firewall changes, subnet/DNS changes, and identity role assignments;
+- that the plan does not create hundreds of individual firewall rules or expose secrets in outputs/logs.
 
-1. Add an input variable with type, description, validation where useful, and a safe default only when a default is genuinely appropriate.
-2. Use locals for repeated naming or expressions; avoid hard-coded environment-specific IDs.
-3. Use managed identity instead of registry admin credentials.
-4. Keep secrets out of source control and outputs; use a protected secret store for shared production deployments.
-5. Add outputs only for useful, non-secret operational values.
-6. Update the relevant deployment documentation and verification evidence with every infrastructure change.
-7. Review the plan and run policy/security checks before apply.
+Apply only a reviewed plan, and record the outcome. `validate` proves configuration structure, not that Azure permissions, quotas, regional availability, images, network connectivity, or application endpoints will work.
 
-## Relationship to other tickets
+## Conventions for future changes
 
-See [Azure development deployment](azure-dev-deployment.md) for image build/push, two-phase deployment, endpoint configuration, and runtime verification. This document defines the repeatable Terraform authoring and review workflow; it intentionally does not duplicate the full deployment procedure.
+1. Add inputs with types and descriptions; add validation for values with clear constraints.
+2. Use stable names and common tags; avoid hard-coded environment-specific IDs and secrets.
+3. Keep resources grouped by responsibility in files within this root module. Preserve existing resource addresses unless a reviewed state migration is intentional.
+4. Keep outputs useful and non-sensitive.
+5. Use managed identity for ACR pulls; do not enable ACR admin credentials for convenience.
+6. Keep the Terraform lock file committed.
+7. Update this document when Terraform structure/conventions change, and update the deployment runbook only when deployment behaviour or verification changes.
+8. Keep cloud changes and costs separate from local validation. Do not run `apply` without review and explicit approval.
 
-See [Private database connectivity](private-database-connectivity.md) for the DEVOPS-011 network design and migration warnings.
+## Related documentation
+
+- [Azure development deployment — DEVOPS-009](azure-dev-deployment.md) explains how the environment is assembled, deployed, and live-tested.
+- [Private database connectivity — DEVOPS-011](private-database-connectivity.md) explains the target private-network design and its migration/verification requirements.
+
+This document describes Terraform structure and safe reuse. It intentionally does not repeat the DEVOPS-009 deployment walkthrough.
