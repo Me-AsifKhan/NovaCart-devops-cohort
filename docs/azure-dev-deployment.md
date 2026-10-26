@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-This is the deployment procedure for the DEVOPS-008 Terraform baseline. It has not been deployed or browser-verified unless a deployment record is added after running the checks below. Terraform validation alone is not evidence of a live Azure deployment.
+This is the deployment procedure for the DEVOPS-008 Terraform baseline. **Deployment and live API verification completed on 2026-10-26 (Asia/Kolkata).** The recorded endpoint and results below are the evidence for DEVOPS-009. Terraform validation alone is not evidence of a live deployment.
 
 ## Architecture
 
@@ -49,7 +49,7 @@ az acr login --name "<acr-name>"
 docker build -t "$acrHost/novacart-backend:devops-009" .\novacart\backend
 docker build -t "$acrHost/novacart-frontend:devops-009" .\novacart\frontend
 docker push "$acrHost/novacart-backend:devops-009"
-docker push "$acrHost/novacart-frontend:devops-009"
+docker push "$acrHost/novacart-frontend:devops-009-fix2"
 ```
 
 Then enable the application resources and apply:
@@ -76,7 +76,20 @@ Invoke-RestMethod "$url/api/ready"
 Invoke-RestMethod "$url/api/products"
 Invoke-RestMethod "$url/api/runtime"
 ```
-Also place a test order through the UI and confirm it appears in order history. The backend's `/ready` endpoint checks database connectivity. If the PostgreSQL firewall blocks ACA egress, inspect the backend Container App's outbound IPs and the created single-IP firewall rules. Do not create a broad `0.0.0.0` firewall exception.
+Also place a test order through the UI and confirm it appears in order history. The backend's `/ready` endpoint checks database connectivity. **Current DEVOPS-009 development compromise:** the deployed PostgreSQL server uses `allow-azure-services-dev` (`0.0.0.0` to `0.0.0.0`) because Container Apps has many possible outbound IPs. This permits Azure services—including services in other customers' subscriptions—to attempt connections. It is broader than the source-IP allowlist originally designed and is not appropriate for production. DEVOPS-011 must remove public PostgreSQL exposure and verify the private path. The old `backend_egress` loop that attempted hundreds of individual rules has been removed from the current configuration.
+
+## Recorded deployment verification — 2026-10-26
+
+- **Status:** Terraform apply succeeded; frontend and backend Container Apps are deployed.
+- **Region / resource group:** Central India / `rg-novacart-dev`.
+- **Public frontend:** https://ca-novacart-dev-frontend.purplemeadow-6a1a6da7.centralindia.azurecontainerapps.io
+- **Internal backend FQDN:** `ca-novacart-dev-backend.internal.purplemeadow-6a1a6da7.centralindia.azurecontainerapps.io`
+- **PostgreSQL FQDN:** `pg-novacart-asif-20261022.postgres.database.azure.com`; database `novacart`.
+- **Images:** backend `novacart-backend:devops-009`; frontend `novacart-frontend:devops-009-fix2`.
+- **Terraform:** `fmt` and `validate` passed. The final image deployment apply reported `0 added, 2 changed, 0 destroyed`; no mass firewall rule creation was included.
+- **Runtime checks:** frontend HTTP 200; `/api/health` returned `status=ok`; `/api/ready` returned `status=ready`; `/api/products` returned three seeded products; `/api/runtime` reported `database_configured=true`; `/api/orders?limit=5` returned a saved order record.
+- **Verification timestamp:** health endpoint reported `2026-10-26T20:39:20+05:30` (India Standard Time). All five API checks passed in the subsequent PowerShell test run.
+- **Persistence clarification:** catalog products are seeded database data, not user-created products. Cart contents are browser-side demo state and are not expected to survive a browser refresh; persisted orders are stored through the backend/database.
 
 ## Expected endpoint
 
