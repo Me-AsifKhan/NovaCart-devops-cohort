@@ -7,7 +7,7 @@ variable "subscription_id" {
 variable "location" {
   description = "Azure region for development resources."
   type        = string
-  default     = "eastus2"
+  default     = "centralindia"
 }
 
 variable "name_prefix" {
@@ -126,7 +126,7 @@ variable "backend_image_tag" {
 variable "frontend_image_tag" {
   description = "Existing frontend image tag in ACR."
   type        = string
-  default     = "devops-009"
+  default     = "devops-009-fix2"
 }
 
 variable "container_cpu" {
