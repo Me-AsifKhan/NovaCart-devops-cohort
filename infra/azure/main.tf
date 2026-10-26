@@ -60,6 +60,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
   resource_group_name           = azurerm_resource_group.this.name
   location                      = azurerm_resource_group.this.location
   version                       = "16"
+  zone                          = "3"
   administrator_login           = var.db_admin_username
   administrator_password        = var.db_admin_password
   sku_name                      = var.postgres_sku_name
@@ -157,6 +158,7 @@ resource "azurerm_container_app" "backend" {
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
   revision_mode                = "Single"
+  workload_profile_name         = "Consumption"
   tags                         = var.tags
 
   identity {
@@ -175,9 +177,8 @@ resource "azurerm_container_app" "backend" {
   }
 
   template {
-    # Scale-to-zero avoids the backend starting before its narrow PostgreSQL
-    # egress firewall rules have been created during the same Terraform apply.
-    min_replicas = 0
+    # Keep one backend replica available for development verification.
+    min_replicas = 1
     max_replicas = 2
     container {
       name   = "novacart-backend"
@@ -227,6 +228,7 @@ resource "azurerm_container_app" "frontend" {
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
   revision_mode                = "Single"
+  workload_profile_name         = "Consumption"
   tags                         = var.tags
 
   identity {
@@ -276,13 +278,15 @@ resource "azurerm_container_app" "frontend" {
   ]
 }
 
-# Restrict the public PostgreSQL firewall to the backend Container App's
-# observed outbound IPs. In private mode, no public firewall rules are created.
-resource "azurerm_postgresql_flexible_server_firewall_rule" "backend_egress" {
-  for_each = var.deploy_application && !var.enable_private_database ? toset(azurerm_container_app.backend[0].outbound_ip_addresses) : toset([])
+# Temporary development compatibility rule. Azure Container Apps can have
+# many outbound IPs, so this broad Azure-services rule avoids creating hundreds
+# of individual firewall objects. It is not a production-safe boundary; DEVOPS-011
+# replaces public PostgreSQL access with private networking.
+resource "azurerm_postgresql_flexible_server_firewall_rule" "allow_azure_services" {
+  count = var.deploy_application && !var.enable_private_database ? 1 : 0
 
-  name             = "aca-${substr(replace(each.value, ".", ""), 0, 15)}"
+  name             = "allow-azure-services-dev"
   server_id        = azurerm_postgresql_flexible_server.this.id
-  start_ip_address = each.value
-  end_ip_address   = each.value
+  start_ip_address = "0.0.0.0"
+  end_ip_address   = "0.0.0.0"
 }
