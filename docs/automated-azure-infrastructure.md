@@ -1,55 +1,84 @@
 # Automated Azure Infrastructure
 
-## Objective
+## Purpose
 
-Run Terraform infrastructure validation and, after the required security and state-management prerequisites are configured, manage Azure development infrastructure through GitHub Actions rather than depending on a developer's laptop.
+Validate Terraform changes in GitHub Actions and prepare a secure, reviewable path for managing NovaCart's Azure development infrastructure without relying on a developer's laptop.
 
 ## Current Workflow
 
-The `terraform-azure-infra.yml` workflow runs on pull requests targeting `main` when Terraform configuration, the workflow, or this document changes.
+`.github/workflows/terraform-azure-infra.yml` runs on pull requests to `main` when changes affect `infra/azure/**`, this workflow, or this document.
 
-The current workflow:
+It currently:
 
 1. Checks out the repository.
 2. Sets up Terraform.
-3. Checks Terraform formatting.
-4. Initializes Terraform without configuring the remote backend.
-5. Validates the Terraform configuration.
+3. Checks formatting with `terraform fmt -check -recursive`.
+4. Initializes Terraform with `terraform init -backend=false -input=false`.
+5. Validates the configuration with `terraform validate`.
 
-This is a validation-only workflow. It does not authenticate to Azure, create an infrastructure plan, or apply infrastructure changes.
+This is a **validation-only** workflow. It does not sign in to Azure, generate a Terraform plan, or change infrastructure. The DEVOPS-013 pull request was merged, and its checks were reported as passing.
 
-## State Management
+## Remote State
 
-The Terraform configuration declares an AzureRM backend, but the CI workflow currently bypasses it using `terraform init -backend=false`.
+Terraform declares an AzureRM backend in `infra/azure/backend.tf`, but the current workflow deliberately disables backend initialization.
 
-Before CI can safely manage real infrastructure, a durable Azure Blob Storage backend must be provisioned and configured. State access must be restricted, and concurrent changes must be controlled through backend locking.
+The Azure Storage account and blob container needed for remote state have not been verified or provisioned. Before CI uses the backend, the team must establish the storage, configure secure access, and verify state locking and recovery.
 
-Terraform state can contain sensitive infrastructure information and must not be committed to Git.
+Terraform state can contain sensitive information. Do not commit state files, backend credentials, or sensitive plan files to the repository.
 
 ## Authentication and Permissions
 
-The future infrastructure workflow should use GitHub Actions OpenID Connect (OIDC) with an Azure federated identity credential rather than storing long-lived Azure credentials in source files.
+The future workflow should authenticate to Azure using GitHub Actions OpenID Connect (OIDC) and a Microsoft Entra federated identity credential, rather than a long-lived client secret.
 
-Azure permissions should follow least privilege and be scoped to the resources the workflow needs to manage.
+OIDC federation and the Azure RBAC permissions needed by GitHub Actions have not yet been configured or verified. A successful Azure CLI login on a developer's computer does not authenticate a GitHub-hosted runner.
 
-## Review and Apply Controls
+Grant only the permissions required for each job. In particular, a planning job should not have permission to modify infrastructure where a read-only approach is practical.
 
-Infrastructure changes must be reviewed before they are applied. A future workflow should generate a Terraform plan, make the proposed changes available for review, and require the configured approval controls before applying changes.
+## Plan, Review, and Apply
 
-The apply workflow must not run until remote state, OIDC authentication, Azure permissions, and environment protection have been verified.
+The current workflow does not create or apply a Terraform plan. Before infrastructure changes are allowed, the workflow must:
+
+- Use the configured remote state and secure Azure authentication.
+- Generate a plan for the reviewed source revision.
+- Make the proposed additions, changes, and deletions available for review.
+- Apply only the reviewed plan, with appropriate branch and environment restrictions.
+- Stop if the source revision changes or the plan is no longer appropriate.
+
+The `azure-development` GitHub Environment exists, but required reviewers have not been configured. Do not describe the current setup as enforcing mandatory human approval. Configure and verify the intended protections before enabling apply.
+
+Do not deploy application infrastructure until the proposed changes, permissions, and estimated costs have been reviewed.
 
 ## Visibility and Operational Boundaries
 
-GitHub Actions run logs provide visibility into validation and workflow failures. A future apply job can use a protected GitHub Environment to record deployment history and enforce approval controls.
+The current validation workflow exposes its results and failures through GitHub Actions. A future apply job can use the `azure-development` environment to record deployment history; approval enforcement depends on the environment's actual protection settings.
 
-This repository's current validation workflow does not prove that Azure infrastructure can be deployed successfully.
+Passing Terraform formatting and validation does not prove that Azure can create the resources successfully. A live deployment, post-deployment verification, and recovery procedure remain future work.
 
-## Development and Production Assumptions
+## Development and Production
 
-The intended development workflow is independent of a developer's local machine. It must use centrally managed state and secure authentication.
+The intended development workflow should run independently of a developer's machine and use centrally managed state and secure authentication.
 
-Production use would additionally require reviewed access policies, controlled state recovery, environment separation, tested rollback and recovery procedures, monitoring, and a documented operational ownership model.
+Production use would require additional controls, including separated environments and permissions, state recovery testing, monitoring and alerting, tested rollback procedures, and clear operational ownership.
 
-## Current Status
+## Status and Next Steps
 
-Terraform formatting, initialization without the remote backend, and configuration validation have passed locally. GitHub Actions execution and live Azure infrastructure automation have not yet been verified.
+**Implemented**
+- Terraform formatting, backend-independent initialization, and configuration validation.
+- A pull-request workflow for the defined Terraform, workflow, and documentation paths.
+- The DEVOPS-013 pull request was merged; its checks were reported as passing.
+
+**Not yet implemented or verified**
+- Azure Blob remote-state storage and backend access.
+- GitHub Actions OIDC federation and least-privilege Azure RBAC.
+- Terraform plan generation and review in GitHub Actions.
+- A controlled apply workflow and live Azure infrastructure automation.
+- Post-apply verification and tested recovery procedures.
+
+**Next**
+1. Estimate the cost of the minimum remote-state setup before provisioning anything.
+2. Establish the backend and verify access and locking.
+3. Configure and test GitHub OIDC and Azure permissions.
+4. Add a restricted plan/apply workflow and test it safely.
+5. Document verification, failure handling, and recovery.
+
+Do not create or modify Azure infrastructure until the relevant plan, permissions, and costs have been reviewed and explicitly approved.
