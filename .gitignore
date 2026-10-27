@@ -8,3 +8,17 @@ __pycache__/
 # Local environment variables
 .env
 !.env.example
+# Terraform local artifacts, state, plans, and overrides (never commit these)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+terraform.tfvars
+**/terraform.tfvars
+!**/terraform.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

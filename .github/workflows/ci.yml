@@ -33,6 +33,8 @@ jobs:
       - name: Validate Terraform configuration
         run: terraform -chdir=infra/azure validate
 
+      - name: Validate Docker Compose configuration
+        run: docker compose -f novacart/compose.yaml config --quiet
       - name: Verify frontend structural assets
         run: |
           set -eu

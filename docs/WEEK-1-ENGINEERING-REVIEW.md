@@ -33,8 +33,9 @@ The frontend and backend have separate Dockerfiles. Docker Compose provides a lo
 The documented startup commands, from the repository root, are:
 
 ```powershell
-docker compose up -d --build
-docker compose ps
+Set-Location .\novacart
+docker compose -f compose.yaml up -d --build
+docker compose -f compose.yaml ps
 ```
 
 The frontend is published on host port 8081 by default. The backend listens on container port 8080 and is not directly published to the host by the Compose configuration. PostgreSQL uses container port 5432 and is also not published to the host by that configuration.

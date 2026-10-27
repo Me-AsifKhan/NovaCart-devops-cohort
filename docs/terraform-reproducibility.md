@@ -5,12 +5,13 @@
 All files under `infra/azure/` remain in **one Terraform root module**. Splitting resources across files is only for readability; it does not create child modules or change Terraform resource addresses.
 
 - `versions.tf`: Terraform and AzureRM provider version constraints.
+- ackend.tf: partial Azure Blob Storage backend declaration for DEVOPS-013; backend storage must exist before standard 	erraform init can succeed.
 - `providers.tf`: AzureRM provider configuration and subscription selection.
 - `variables.tf`: inputs, descriptions, types, validation, and safe defaults.
-- `main.tf`: resource group, Log Analytics, ACR, identity, role assignment, and Container Apps environment.
-- `postgresql.tf`: PostgreSQL server/database and public-development firewall configuration.
-- `networking.tf`: optional VNet, subnets, private DNS zone, and DNS link for DEVOPS-011.
-- `container_apps.tf`: optional frontend and backend Container Apps.
+- `main.tf`: resource group, Log Analytics, ACR, identity, role assignment, Container Apps environment, PostgreSQL server/database, and development firewall rules.
+
+- `network.tf`: optional VNet, delegated subnets, private DNS zone, and VNet link for DEVOPS-011.
+- `apps.tf`: optional frontend and backend Container Apps.
 - `outputs.tf`: useful, non-secret IDs, hostnames, region, and application URL.
 - `terraform.tfvars.example`: example non-secret settings; copy locally to `terraform.tfvars` and replace placeholders before use.
 - `.terraform.lock.hcl`: selected provider versions/checksums; commit this file and change it only through a reviewed provider update.
@@ -76,3 +77,7 @@ Apply only a reviewed plan, and record the outcome. `validate` proves configurat
 - [Private database connectivity — DEVOPS-011](private-database-connectivity.md) explains the target private-network design and its migration/verification requirements.
 
 This document describes Terraform structure and safe reuse. It intentionally does not repeat the DEVOPS-009 deployment walkthrough.
+
+## Repository layout alignment
+
+The local Compose file lives at `novacart/compose.yaml`; run Compose commands from that directory. Terraform files remain a single root module under `infra/azure/`; changing file names does not change resource addresses. Use `terraform init -backend=false` for local static validation. CI will provide remote-backend settings only after the Azure state storage account and container are bootstrapped. Never commit `*.tfplan`, Terraform state, real tfvars, or credentials.

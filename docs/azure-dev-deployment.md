@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-This is the deployment procedure for the DEVOPS-008 Terraform baseline. **Deployment and live API verification completed on 2026-10-26 (Asia/Kolkata).** The recorded endpoint and results below are the evidence for DEVOPS-009. Terraform validation alone is not evidence of a live deployment.
+This is the deployment procedure for the DEVOPS-008 Terraform baseline. **Deployment and live API verification completed on 2026-10-26 (Asia/Kolkata).** The lab resources have since been deleted to control cost; the endpoint and results below are historical, not a currently running deployment. The recorded endpoint and results below are the evidence for DEVOPS-009. Terraform validation alone is not evidence of a live deployment.
 
 ## Architecture
 
