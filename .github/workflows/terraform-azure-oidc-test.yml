@@ -1,0 +1,70 @@
+
+name: NovaCart Azure OIDC Backend Test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  backend-access:
+    name: Verify OIDC and Terraform State Access
+    runs-on: ubuntu-latest
+    environment: azure-development
+
+    defaults:
+      run:
+        working-directory: infra/azure
+
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Login to Azure using OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify Azure identity and blob access
+        shell: bash
+        run: |
+          az account show \
+            --query '{subscription:id,tenant:tenantId}' \
+            -o json
+
+          az storage blob list \
+            --account-name stnovacarttf1027 \
+            --container-name tfstate \
+            --auth-mode login \
+            --query '[].name' \
+            -o table
+
+      - name: Initialize Terraform with remote state
+        shell: bash
+        run: |
+          terraform init -input=false -reconfigure \
+            -backend-config="resource_group_name=rg-novacart-tfstate" \
+            -backend-config="storage_account_name=stnovacarttf1027" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=novacart-dev.tfstate" \
+            -backend-config="use_azuread_auth=true" \
+            -backend-config="use_oidc=true" \
+            -backend-config="client_id=${ARM_CLIENT_ID}" \
+            -backend-config="tenant_id=${ARM_TENANT_ID}" \
+            -backend-config="subscription_id=${ARM_SUBSCRIPTION_ID}"
