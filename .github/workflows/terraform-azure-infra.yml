@@ -1,0 +1,41 @@
+
+name: NovaCart Azure Infrastructure
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "infra/azure/**"
+      - ".github/workflows/terraform-azure-infra.yml"
+      - "docs/automated-azure-infrastructure.md"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Terraform Static Validation
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: infra/azure
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+
+      - name: Initialize Terraform without backend
+        run: terraform init -backend=false -input=false
+
+      - name: Validate Terraform
+        run: terraform validate
