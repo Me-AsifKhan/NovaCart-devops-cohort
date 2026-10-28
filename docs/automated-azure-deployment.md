@@ -2,7 +2,7 @@
 
 ## Purpose
 
-DEVOPS-014 builds and publishes the NovaCart frontend and backend containers after application changes merge to `main), then updates the Azure development Container Apps to run the exact image digests produced by that run.
+DEVOPS-014 builds and publishes the NovaCart frontend and backend containers after application changes merge to `main`, then updates the Azure development Container Apps to run the exact image digests produced by that run.
 
 The workflow is `.github/workflows/azure-dev-deploy.yml`. It complements, rather than replaces, the CI verification suite and Terraform infrastructure workflows.
 
@@ -11,7 +11,7 @@ The workflow is `.github/workflows/azure-dev-deploy.yml`. It complements, rather
 1. An application change merges into `main`. GitHub branch protection is expected to require the existing `NovaCart Verification Suite` before the merge.
 2. GitHub Actions checks out the merged commit and authenticates to Azure with the `azure-development` environment's OIDC identity. No client secret is placed in YAML.
 3. The workflow checks that the development resource group, ACR, and both Container Apps already exist. It fails early if these prerequisites or the identity's permissions are missing.
-4. Docker Buildx builds the backend from `novacart/backend` and the frontend from `novacart/frontend).
+4. Docker Buildx builds the backend from `novacart/backend` and the frontend from `novacart/frontend`.
 5. Both images are pushed to ACR with the source commit SHA as a traceable tag. The workflow captures each registry digest.
 6. The backend and then the frontend are updated to use digest references (`image@sha256:...`), not a mutable `latest` tag.
 7. The workflow verifies that Azure reports the requested image references and writes the source commit, image digests, active revisions, and run link to the GitHub Actions summary.
@@ -84,7 +84,7 @@ The deployed image should contain the expected digest and correspond to the comm
 
 ## Safety and operational boundaries
 
-- Delivery is limited to pushes to `main) affecting the frontend, backend, or this workflow; manual runs must use `main`.
+- Delivery is limited to pushes to `main` affecting the frontend, backend, or this workflow; manual runs must use `main`.
 - The workflow has read-only GitHub repository permissions and OIDC login; it does not use a stored Azure client secret.
 - Image tags contain the source commit SHA, and deployments use image digests.
 - The workflow does not run Terraform, create/delete Azure infrastructure, modify database schema, or implement automatic rollback.
