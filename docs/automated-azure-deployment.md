@@ -29,7 +29,7 @@ The resource names follow the defaults in `infra/azure`:
 | Backend Container App | `ca-novacart-dev-backend` |
 | Frontend Container App | `ca-novacart-dev-frontend` |
 
-Terraform currently declares the application Container Apps behind `deploy_application`, whose default is `false`. The infrastructure must therefore be provisioned with the application resources enabled before this deployment workflow can succeed. DEVOPS-013 owns infrastructure provisioning; DEVOPS-014 should not create infrastructure as a side effect of deploying images.
+Terraform currently declares the application Container Apps behind `deploy_application`, whose default is `false`. The infrastructure must therefore be provisioned with the application resources enabled before this deployment workflow can succeed. DEVOPS-013 owns infrastructure provisioning; DEVOPS-014 should not create infrastructure as a side effect of deploying images. The Terraform app resources also ignore subsequent changes to the image field, so a later infrastructure apply does not replace the digest deployed by CI with the bootstrap image tag. Terraform remains responsible for the app configuration; this workflow owns subsequent image rollouts.
 
 ## GitHub environment configuration
 
