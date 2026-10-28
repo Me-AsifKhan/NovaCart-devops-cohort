@@ -7,7 +7,6 @@ on:
     paths:
       - "novacart/frontend/**"
       - "novacart/backend/**"
-      - ".github/workflows/azure-dev-deploy.yml"
   workflow_dispatch:
 
 permissions:
