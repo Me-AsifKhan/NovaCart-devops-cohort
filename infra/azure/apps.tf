@@ -10,6 +10,11 @@ resource "azurerm_container_app" "backend" {
   workload_profile_name        = "Consumption"
   tags                         = var.tags
 
+  # After bootstrap, the delivery workflow owns image rollouts by digest.
+  lifecycle {
+    ignore_changes = [template[0].container[0].image]
+  }
+
   identity {
     type         = "UserAssigned"
     identity_ids = [azurerm_user_assigned_identity.container_apps.id]
@@ -79,6 +84,11 @@ resource "azurerm_container_app" "frontend" {
   revision_mode                = "Single"
   workload_profile_name        = "Consumption"
   tags                         = var.tags
+
+  # After bootstrap, the delivery workflow owns image rollouts by digest.
+  lifecycle {
+    ignore_changes = [template[0].container[0].image]
+  }
 
   identity {
     type         = "UserAssigned"

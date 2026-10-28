@@ -1,0 +1,175 @@
+name: NovaCart Azure DEV Deployment
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "novacart/frontend/**"
+      - "novacart/backend/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: novacart-azure-dev-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, Publish, and Deploy DEV
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: azure-development
+
+    env:
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ACR_NAME: ${{ vars.NOVACART_ACR_NAME }}
+      AZURE_RESOURCE_GROUP: rg-novacart-dev
+      BACKEND_APP_NAME: ca-novacart-dev-backend
+      FRONTEND_APP_NAME: ca-novacart-dev-frontend
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${AZURE_CLIENT_ID:?Missing environment variable AZURE_CLIENT_ID}"
+          : "${AZURE_TENANT_ID:?Missing environment variable AZURE_TENANT_ID}"
+          : "${AZURE_SUBSCRIPTION_ID:?Missing environment variable AZURE_SUBSCRIPTION_ID}"
+          : "${ACR_NAME:?Missing environment variable NOVACART_ACR_NAME}"
+
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Azure DEV deployments are permitted only from main."
+            exit 1
+          fi
+
+          if [[ ! "$ACR_NAME" =~ ^[A-Za-z0-9]{5,50}$ ]]; then
+            echo "::error::NOVACART_ACR_NAME must contain 5-50 alphanumeric characters."
+            exit 1
+          fi
+
+      - name: Authenticate to Azure with OIDC
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify DEV resources and log in to ACR
+        id: azure_preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          az group show --name "$AZURE_RESOURCE_GROUP" --output none
+          login_server="$(az acr show --name "$ACR_NAME" --query loginServer --output tsv)"
+          test -n "$login_server"
+
+          az containerapp show --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --output none
+          az containerapp show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --output none
+
+          az acr login --name "$ACR_NAME"
+          echo "login_server=$login_server" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and publish backend image
+        id: build_backend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./novacart/backend
+          push: true
+          tags: ${{ steps.azure_preflight.outputs.login_server }}/novacart-backend:${{ github.sha }}
+
+      - name: Build and publish frontend image
+        id: build_frontend
+        uses: docker/build-push-action@v7
+        with:
+          context: ./novacart/frontend
+          push: true
+          tags: ${{ steps.azure_preflight.outputs.login_server }}/novacart-frontend:${{ github.sha }}
+
+      - name: Deploy image digests to Azure Container Apps
+        id: deploy_images
+        shell: bash
+        env:
+          ACR_LOGIN_SERVER: ${{ steps.azure_preflight.outputs.login_server }}
+          BACKEND_DIGEST: ${{ steps.build_backend.outputs.digest }}
+          FRONTEND_DIGEST: ${{ steps.build_frontend.outputs.digest }}
+        run: |
+          set -euo pipefail
+          : "${BACKEND_DIGEST:?Backend image digest was not produced}"
+          : "${FRONTEND_DIGEST:?Frontend image digest was not produced}"
+
+          backend_image="${ACR_LOGIN_SERVER}/novacart-backend@${BACKEND_DIGEST}"
+          frontend_image="${ACR_LOGIN_SERVER}/novacart-frontend@${FRONTEND_DIGEST}"
+
+          # Deploy the backend first so the frontend targets the intended API version.
+          az containerapp update \
+            --name "$BACKEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "$backend_image" \
+            --output none
+
+          az containerapp update \
+            --name "$FRONTEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --image "$frontend_image" \
+            --output none
+
+          # Verify that Azure reports the exact digest-based image configured for each app.
+          for attempt in $(seq 1 12); do
+            actual_backend="$(az containerapp show --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[?name=='novacart-backend'].image | [0]" --output tsv)"
+            actual_frontend="$(az containerapp show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[?name=='novacart-frontend'].image | [0]" --output tsv)"
+            if [[ "$actual_backend" == "$backend_image" && "$actual_frontend" == "$frontend_image" ]]; then
+              break
+            fi
+            if [[ "$attempt" -eq 12 ]]; then
+              echo "::error::Azure did not report the expected image digests after the update."
+              echo "Backend image: $actual_backend"
+              echo "Frontend image: $actual_frontend"
+              exit 1
+            fi
+            sleep 5
+          done
+
+          backend_revision="$(az containerapp revision list --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "[?properties.active == `true`].name | [0]" --output tsv)"
+          frontend_revision="$(az containerapp revision list --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "[?properties.active == `true`].name | [0]" --output tsv)"
+
+          echo "backend_image=$backend_image" >> "$GITHUB_OUTPUT"
+          echo "frontend_image=$frontend_image" >> "$GITHUB_OUTPUT"
+          echo "backend_revision=$backend_revision" >> "$GITHUB_OUTPUT"
+          echo "frontend_revision=$frontend_revision" >> "$GITHUB_OUTPUT"
+
+      - name: Publish deployment summary
+        if: always()
+        shell: bash
+        env:
+          BACKEND_IMAGE: ${{ steps.deploy_images.outputs.backend_image }}
+          FRONTEND_IMAGE: ${{ steps.deploy_images.outputs.frontend_image }}
+          BACKEND_REVISION: ${{ steps.deploy_images.outputs.backend_revision }}
+          FRONTEND_REVISION: ${{ steps.deploy_images.outputs.frontend_revision }}
+        run: |
+          {
+            echo "## NovaCart Azure DEV deployment"
+            echo
+            echo "- **Result:** ${{ job.status }}"
+            echo "- **Source commit:** [${GITHUB_SHA}]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)"
+            echo "- **Workflow run:** [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo "- **Resource group:** ${AZURE_RESOURCE_GROUP}"
+            echo "- **Backend image:** ${BACKEND_IMAGE:-not published/deployed}"
+            echo "- **Backend revision:** ${BACKEND_REVISION:-not verified}"
+            echo "- **Frontend image:** ${FRONTEND_IMAGE:-not published/deployed}"
+            echo "- **Frontend revision:** ${FRONTEND_REVISION:-not verified}"
+          } >> "$GITHUB_STEP_SUMMARY"
