@@ -283,7 +283,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Roll back to the previously known-good revisions on failure
-        if: failure() && steps.azure_login.outcome == 'success' && steps.capture_stable.outcome == 'success'
+        if: always() && steps.azure_login.outcome == 'success' && steps.capture_stable.outcome == 'success' && (steps.rollout.outcome == 'failure' || steps.rollout.outcome == 'cancelled')
         shell: bash
         env:
           FRONTEND_URL: ${{ steps.preflight.outputs.frontend_url }}
