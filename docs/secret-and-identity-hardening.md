@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-This document records the current security controls in the repository and the changes required before a live Azure deployment can be treated as hardened. It is not evidence that the deleted NovaCart runtime resources are currently deployed. At the last subscription inventory, only the Terraform-state Storage Account remained.
+This document records the security patterns in source and the changes required before a live Azure deployment can be treated as hardened. The Azure lab resources, including the Terraform state Storage Account, were intentionally deleted on 2026-10-29. The post-cleanup inventory showed no resource groups or resources in the selected subscription; Azure settings described below are historical unless explicitly identified as source configuration.
 
 ## 1. Credential and secret inventory
 
@@ -10,7 +10,7 @@ This document records the current security controls in the repository and the ch
 |---|---|---|
 | Azure subscription, tenant and app client IDs | GitHub Environment variables for `azure-development` | Identifiers, not secrets. Current workflow uses `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_SUBSCRIPTION_ID`. |
 | GitHub-to-Azure authentication | GitHub OIDC plus Microsoft Entra federated credential | Implemented and tested for the state-container workflow. No client secret is stored in the repository. |
-| Terraform state access | Azure RBAC on the `tfstate` container | The GitHub service principal has `Storage Blob Data Contributor` scoped to the container only. This does not grant permission to provision subscription resources. |
+| Terraform state access | Azure RBAC on the `tfstate` container | Before teardown, the GitHub service principal had `Storage Blob Data Contributor` scoped to the `tfstate` container only. The container and Storage Account have since been deleted, so that permission no longer provides usable backend access. Re-create the backend and re-verify the scoped assignment before using the workflow again. It never granted permission to provision subscription resources. |
 | PostgreSQL administrator password | Local shell environment or protected CI secret, supplied as `TF_VAR_db_admin_password` only when needed | Sensitive Terraform input. It must not be committed in `terraform.tfvars`, command history, CI logs, or image build arguments. Terraform state and saved plans can contain sensitive values. |
 | Runtime database credential / `DATABASE_URL` | A runtime secret store or managed secret reference | Current Terraform code constructs the Container Apps secret from the PostgreSQL administrator credentials. This means the app uses an administrator-level credential and Terraform state can contain the connection string. This should be replaced before any production pilot. |
 | Local Compose database password | Local-only `novacart/.env` ignored by Git | `novacart/.env.example` uses a demo default for local development only. Never reuse it in Azure or production. |
@@ -22,7 +22,7 @@ This document records the current security controls in the repository and the ch
 | Identity | Intended use | Required scope |
 |---|---|---|
 | Developer's Entra user | Local bootstrap and approved manual administration | Only the roles needed for the particular task; avoid using a human user in unattended workflows. |
-| GitHub Actions Entra service principal | Terraform state backend authentication now; future CI roles must be added deliberately | Currently state-container access only. For read-only plan, grant an appropriate read role separately after review. Apply permissions must be limited to the intended resource group where possible. |
+| GitHub Actions Entra service principal | Terraform state backend authentication now; future CI roles must be added deliberately | Before teardown, state-container access was the only verified Azure role. That resource scope is deleted; any new backend and role assignment must be re-established and verified. For a read-only plan, grant an appropriate resource-read role separately after review. Apply permissions must be limited to the intended resource group where possible. |
 | Container Apps user-assigned managed identity | Pull frontend/backend images from ACR at runtime | `AcrPull` on the registry only. Do not grant subscription Contributor. |
 | PostgreSQL application user (target state) | Backend CRUD on NovaCart application tables | A dedicated non-owner, non-administrator database role limited to the required database/schema. The current code does not provision or verify this separation. |
 
@@ -34,7 +34,7 @@ Never reuse the GitHub workflow identity as the application runtime identity. OI
 
 - GitHub Actions uses OIDC to exchange a workflow identity for an Azure token; the OIDC backend test passed on `main`.
 - GitHub Environment identifiers are stored as variables rather than embedded credentials.
-- The Azure Storage backend disables anonymous blob access and storage shared-key authorization; blob access is via Entra ID and scoped Azure RBAC.
+- Before deletion, the Azure Storage backend was configured to disable anonymous blob access and storage shared-key authorization, with blob access via Entra ID and scoped Azure RBAC. The Storage Account is no longer present, so these are historical settings rather than current live resources.
 - ACR admin access is disabled in Terraform.
 - Terraform defines a user-assigned managed identity with an `AcrPull` assignment for Container Apps.
 - `DATABASE_URL` is provided to the backend as a Container Apps secret reference rather than as a plain environment variable in the container definition.
@@ -71,4 +71,4 @@ Rotation must not require editing application source code or committing configur
 
 ## Readiness statement
 
-The platform has a working OIDC path for Terraform state and a managed-identity pattern for ACR pulls in Terraform code. Secret hardening is not complete: the current Terraform design passes the PostgreSQL administrator credential into the application connection string, no Key Vault integration is configured, and the Azure application runtime is not currently deployed. Do not claim the live workload satisfies the full DEVOPS-015 acceptance criteria until the app database identity and secret lifecycle are implemented and verified.
+The GitHub-to-Azure OIDC flow and blob-backend access were verified historically on 2026-10-27, before the backend was deleted on 2026-10-29. The Terraform source contains a managed-identity pattern for ACR pulls, but no live runtime currently exists. Secret hardening is not complete: Terraform still constructs the application connection string from the PostgreSQL administrator credential, no Key Vault integration is configured, and a least-privilege application database role is not implemented or verified. Do not claim the full DEVOPS-015 acceptance criteria are met until those controls are implemented and tested.
