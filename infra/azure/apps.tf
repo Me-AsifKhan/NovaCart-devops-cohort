@@ -55,32 +55,32 @@ resource "azurerm_container_app" "backend" {
 
       # Process-level health: do not restart the app just because PostgreSQL is unavailable.
       liveness_probe {
-        transport                 = "HTTP"
-        port                      = 8080
-        path                      = "/health"
-        interval_seconds          = 10
-        timeout                   = 3
-        failure_count_threshold   = 3
+        transport               = "HTTP"
+        port                    = 8080
+        path                    = "/health"
+        interval_seconds        = 10
+        timeout                 = 3
+        failure_count_threshold = 3
       }
 
       startup_probe {
-        transport                 = "HTTP"
-        port                      = 8080
-        path                      = "/health"
-        interval_seconds          = 5
-        timeout                   = 3
-        failure_count_threshold   = 24
+        transport               = "HTTP"
+        port                    = 8080
+        path                    = "/health"
+        interval_seconds        = 5
+        timeout                 = 3
+        failure_count_threshold = 24
       }
 
       # Readiness includes a database query; failed readiness removes this replica from traffic.
       readiness_probe {
-        transport                 = "HTTP"
-        port                      = 8080
-        path                      = "/ready"
-        interval_seconds          = 5
-        timeout                   = 3
-        failure_count_threshold   = 3
-        success_count_threshold   = 1
+        transport               = "HTTP"
+        port                    = 8080
+        path                    = "/ready"
+        interval_seconds        = 5
+        timeout                 = 3
+        failure_count_threshold = 3
+        success_count_threshold = 1
       }
 
       env {
@@ -105,7 +105,7 @@ resource "azurerm_container_app" "backend" {
   ingress {
     external_enabled           = false
     target_port                = 8080
-    transport                  = "http"
+    transport               = "http"
     allow_insecure_connections = true
 
     traffic_weight {
@@ -184,13 +184,13 @@ resource "azurerm_container_app" "frontend" {
       }
 
       readiness_probe {
-        transport                 = "HTTP"
-        port                      = 80
-        path                      = "/"
-        interval_seconds          = 5
-        timeout                   = 3
-        failure_count_threshold   = 3
-        success_count_threshold   = 1
+        transport               = "HTTP"
+        port                    = 80
+        path                    = "/"
+        interval_seconds        = 5
+        timeout                 = 3
+        failure_count_threshold = 3
+        success_count_threshold = 1
       }
 
       env {
@@ -207,7 +207,7 @@ resource "azurerm_container_app" "frontend" {
   ingress {
     external_enabled           = true
     target_port                = 80
-    transport                  = "http"
+    transport               = "http"
     allow_insecure_connections = true
 
     traffic_weight {
