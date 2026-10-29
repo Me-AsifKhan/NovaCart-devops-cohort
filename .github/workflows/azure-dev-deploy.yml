@@ -1,13 +1,35 @@
 name: NovaCart Azure DEV Deployment
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "novacart/frontend/**"
-      - "novacart/backend/**"
+  # Deliberately manual: merging an application PR must never deploy to Azure by itself.
   workflow_dispatch:
+    inputs:
+      confirm_release:
+        description: "Type RELEASE to build and deploy the current main commit"
+        type: choice
+        options:
+          - NO
+          - RELEASE
+        default: NO
+        required: true
+      backend_canary_percent:
+        description: "Candidate backend share while validating the new revision"
+        type: choice
+        options:
+          - "5"
+          - "10"
+          - "20"
+        default: "10"
+        required: true
+      backend_canary_observation_seconds:
+        description: "Seconds to observe the backend canary before full cutover"
+        type: choice
+        options:
+          - "30"
+          - "60"
+          - "120"
+        default: "60"
+        required: true
 
 permissions:
   contents: read
@@ -33,6 +55,8 @@ jobs:
       ACA_ENV_NAME: cae-novacart-dev
       BACKEND_APP_NAME: ca-novacart-dev-backend
       FRONTEND_APP_NAME: ca-novacart-dev-frontend
+      BACKEND_CANARY_PERCENT: ${{ inputs.backend_canary_percent }}
+      BACKEND_CANARY_OBSERVATION_SECONDS: ${{ inputs.backend_canary_observation_seconds }}
 
     steps:
       - name: Checkout source
@@ -42,6 +66,8 @@ jobs:
 
       - name: Validate deployment configuration
         shell: bash
+        env:
+          CONFIRM_RELEASE: ${{ inputs.confirm_release }}
         run: |
           set -euo pipefail
           : "${AZURE_CLIENT_ID:?Missing environment variable AZURE_CLIENT_ID}"
@@ -50,9 +76,21 @@ jobs:
           : "${ACR_NAME:?Missing environment variable NOVACART_ACR_NAME}"
 
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "::error::Azure DEV deployments are permitted only from main."
+            echo "::error::Azure DEV releases are permitted only from main."
             exit 1
           fi
+          if [[ "$CONFIRM_RELEASE" != "RELEASE" ]]; then
+            echo "::error::Release not confirmed. Select RELEASE in the manual workflow inputs."
+            exit 1
+          fi
+          case "$BACKEND_CANARY_PERCENT" in
+            5|10|20) ;;
+            *) echo "::error::Backend canary percentage must be 5, 10, or 20."; exit 1 ;;
+          esac
+          case "$BACKEND_CANARY_OBSERVATION_SECONDS" in
+            30|60|120) ;;
+            *) echo "::error::Backend observation window must be 30, 60, or 120 seconds."; exit 1 ;;
+          esac
 
           if [[ ! "$ACR_NAME" =~ ^[A-Za-z0-9]{5,50}$ ]]; then
             echo "::error::NOVACART_ACR_NAME must contain 5-50 alphanumeric characters."
@@ -321,9 +359,26 @@ jobs:
             --output none
           wait_for_revision "$BACKEND_APP_NAME" "$NEW_BACKEND_REVISION"
 
-          # Backend is internal. Shift it only after the platform readiness probe passes,
-          # then test it through the still-stable public frontend. Any failure restores both apps.
+          # Backend is internal. Use a small weighted canary because tests must reach it
+          # through the stable frontend proxy. Any failed request triggers traffic rollback.
+          STABLE_BACKEND_PERCENT=$((100 - BACKEND_CANARY_PERCENT))
           TRAFFIC_SHIFTED=true
+          az containerapp ingress traffic set \
+            --name "$BACKEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --revision-weight "${OLD_BACKEND_REVISION}=${STABLE_BACKEND_PERCENT}" "${NEW_BACKEND_REVISION}=${BACKEND_CANARY_PERCENT}" \
+            --output none
+          {
+            echo "- **Backend canary:** ${NEW_BACKEND_REVISION} receives ${BACKEND_CANARY_PERCENT}% while ${OLD_BACKEND_REVISION} retains ${STABLE_BACKEND_PERCENT}%."
+            echo "- **Backend observation:** ${BACKEND_CANARY_OBSERVATION_SECONDS} seconds."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          for attempt in $(seq 1 $((BACKEND_CANARY_OBSERVATION_SECONDS / 10))); do
+            smoke_test_frontend "$FRONTEND_URL"
+            sleep 10
+          done
+
+          # Full cutover only after the repeated canary smoke tests pass.
           az containerapp ingress traffic set \
             --name "$BACKEND_APP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
