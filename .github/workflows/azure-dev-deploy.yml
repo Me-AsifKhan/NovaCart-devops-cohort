@@ -1,27 +1,48 @@
-name: NovaCart Azure DEV Deployment
+name: NovaCart Safe Azure DEV Release
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - "novacart/frontend/**"
-      - "novacart/backend/**"
   workflow_dispatch:
+    inputs:
+      confirm_release:
+        description: "Type RELEASE to build and deploy the current main commit"
+        type: choice
+        options:
+          - NO
+          - RELEASE
+        default: NO
+        required: true
+      canary_percent:
+        description: "Percentage routed to the candidate revision during validation"
+        type: choice
+        options:
+          - "5"
+          - "10"
+          - "20"
+        default: "10"
+        required: true
+      observation_minutes:
+        description: "Minutes to observe the candidate before promoting it"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "5"
+        default: "2"
+        required: true
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: novacart-azure-dev-deploy
+  group: novacart-azure-dev-release
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Build, Publish, and Deploy DEV
+    name: Canary, validate, and promote
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment: azure-development
 
     env:
@@ -32,6 +53,8 @@ jobs:
       AZURE_RESOURCE_GROUP: rg-novacart-dev
       BACKEND_APP_NAME: ca-novacart-dev-backend
       FRONTEND_APP_NAME: ca-novacart-dev-frontend
+      CANARY_PERCENT: ${{ inputs.canary_percent }}
+      OBSERVATION_MINUTES: ${{ inputs.observation_minutes }}
 
     steps:
       - name: Checkout source
@@ -39,137 +62,295 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Validate deployment configuration
+      - name: Validate release request
         shell: bash
+        env:
+          CONFIRM_RELEASE: ${{ inputs.confirm_release }}
         run: |
           set -euo pipefail
-          : "${AZURE_CLIENT_ID:?Missing environment variable AZURE_CLIENT_ID}"
-          : "${AZURE_TENANT_ID:?Missing environment variable AZURE_TENANT_ID}"
-          : "${AZURE_SUBSCRIPTION_ID:?Missing environment variable AZURE_SUBSCRIPTION_ID}"
-          : "${ACR_NAME:?Missing environment variable NOVACART_ACR_NAME}"
-
           if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "::error::Azure DEV deployments are permitted only from main."
+            echo "::error::Releases can be started only from main."
             exit 1
           fi
-
-          if [[ ! "$ACR_NAME" =~ ^[A-Za-z0-9]{5,50}$ ]]; then
-            echo "::error::NOVACART_ACR_NAME must contain 5-50 alphanumeric characters."
+          if [[ "$CONFIRM_RELEASE" != "RELEASE" ]]; then
+            echo "::error::Release not confirmed. Select RELEASE to continue."
+            exit 1
+          fi
+          : "${AZURE_CLIENT_ID:?Missing AZURE_CLIENT_ID}"
+          : "${AZURE_TENANT_ID:?Missing AZURE_TENANT_ID}"
+          : "${AZURE_SUBSCRIPTION_ID:?Missing AZURE_SUBSCRIPTION_ID}"
+          : "${ACR_NAME:?Missing NOVACART_ACR_NAME}"
+          [[ "$CANARY_PERCENT" =~ ^(5|10|20)$ ]] || { echo "::error::Unsupported canary percentage."; exit 1; }
+          [[ "$OBSERVATION_MINUTES" =~ ^(1|2|5)$ ]] || { echo "::error::Unsupported observation window."; exit 1; }
+          if (( CANARY_PERCENT < 1 || CANARY_PERCENT > 20 )); then
+            echo "::error::Canary percent must remain between 1 and 20."
             exit 1
           fi
 
       - name: Authenticate to Azure with OIDC
+        id: azure_login
         uses: azure/login@v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Verify DEV resources and log in to ACR
-        id: azure_preflight
+      - name: Preflight Azure resources and prepare CLI
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          az config set extension.use_dynamic_install=yes_without_prompt >/dev/null
+          az extension add --name containerapp --upgrade --only-show-errors
+          az group show --name "$AZURE_RESOURCE_GROUP" --output none
+          login_server="$(az acr show --name "$ACR_NAME" --query loginServer --output tsv)"
+          [[ -n "$login_server" && "$login_server" != "None" ]]
+          for app in "$BACKEND_APP_NAME" "$FRONTEND_APP_NAME"; do
+            az containerapp show --name "$app" --resource-group "$AZURE_RESOURCE_GROUP" --output none
+            mode="$(az containerapp show --name "$app" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.configuration.activeRevisionsMode --output tsv)"
+            if [[ "${mode,,}" != "multiple" ]]; then
+              echo "::error::$app must be in Multiple revision mode. Apply and review the DEVOPS-019 Terraform configuration before releasing."
+              exit 1
+            fi
+          done
+          frontend_fqdn="$(az containerapp show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.configuration.ingress.fqdn --output tsv)"
+          [[ -n "$frontend_fqdn" && "$frontend_fqdn" != "None" ]]
+          az acr login --name "$ACR_NAME"
+          echo "login_server=$login_server" >> "$GITHUB_OUTPUT"
+          echo "frontend_url=https://$frontend_fqdn" >> "$GITHUB_OUTPUT"
+
+      - name: Capture and pin the current known-good revisions
+        id: capture_stable
         shell: bash
         run: |
           set -euo pipefail
 
-          az group show --name "$AZURE_RESOURCE_GROUP" --output none
-          login_server="$(az acr show --name "$ACR_NAME" --query loginServer --output tsv)"
-          test -n "$login_server"
+          stable_revision() {
+            local app="$1"
+            local traffic revision
+            traffic="$(az containerapp show --name "$app" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.configuration.ingress.traffic --output json)"
+            # Prefer the revision carrying the largest positive share; this also recovers from a prior interrupted canary.
+            revision="$(printf '%s' "$traffic" | jq -r '[.[]? | select((.revisionName // "") != "" and (.weight // 0) > 0)] | sort_by(.weight) | last | .revisionName // empty')"
+            if [[ -z "$revision" || "$revision" == "None" ]]; then
+              revision="$(az containerapp show --name "$app" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.latestReadyRevisionName --output tsv)"
+            fi
+            if [[ -z "$revision" || "$revision" == "None" ]]; then
+              echo "::error::Could not identify a known-good active revision for $app."
+              return 1
+            fi
+            echo "$revision"
+          }
 
-          az containerapp show --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --output none
-          az containerapp show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --output none
+          old_backend="$(stable_revision "$BACKEND_APP_NAME")"
+          old_frontend="$(stable_revision "$FRONTEND_APP_NAME")"
+          old_backend_image="$(az containerapp revision show --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$old_backend" --query "properties.template.containers[0].image" --output tsv)"
+          old_frontend_image="$(az containerapp revision show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$old_frontend" --query "properties.template.containers[0].image" --output tsv)"
 
-          az acr login --name "$ACR_NAME"
-          echo "login_server=$login_server" >> "$GITHUB_OUTPUT"
+          [[ -n "$old_backend_image" && "$old_backend_image" != "None" ]]
+          [[ -n "$old_frontend_image" && "$old_frontend_image" != "None" ]]
+
+          # Pin traffic to explicit revision names. A subsequent image update must not implicitly move all traffic.
+          az containerapp ingress traffic set --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision-weight "$old_backend=100" --output none
+          az containerapp ingress traffic set --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision-weight "$old_frontend=100" --output none
+
+          {
+            echo "backend_revision=$old_backend"
+            echo "frontend_revision=$old_frontend"
+            echo "backend_image=$old_backend_image"
+            echo "frontend_image=$old_frontend_image"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build and publish backend image
+      - name: Build and push backend image
         id: build_backend
         uses: docker/build-push-action@v7
         with:
           context: ./novacart/backend
           push: true
-          tags: ${{ steps.azure_preflight.outputs.login_server }}/novacart-backend:${{ github.sha }}
+          tags: ${{ steps.preflight.outputs.login_server }}/novacart-backend:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
 
-      - name: Build and publish frontend image
+      - name: Build and push frontend image
         id: build_frontend
         uses: docker/build-push-action@v7
         with:
           context: ./novacart/frontend
           push: true
-          tags: ${{ steps.azure_preflight.outputs.login_server }}/novacart-frontend:${{ github.sha }}
+          tags: ${{ steps.preflight.outputs.login_server }}/novacart-frontend:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
 
-      - name: Deploy image digests to Azure Container Apps
-        id: deploy_images
+      - name: Deploy, canary, validate, and promote
+        id: rollout
         shell: bash
         env:
-          ACR_LOGIN_SERVER: ${{ steps.azure_preflight.outputs.login_server }}
+          FRONTEND_URL: ${{ steps.preflight.outputs.frontend_url }}
+          ACR_LOGIN_SERVER: ${{ steps.preflight.outputs.login_server }}
+          OLD_BACKEND_REV: ${{ steps.capture_stable.outputs.backend_revision }}
+          OLD_FRONTEND_REV: ${{ steps.capture_stable.outputs.frontend_revision }}
           BACKEND_DIGEST: ${{ steps.build_backend.outputs.digest }}
           FRONTEND_DIGEST: ${{ steps.build_frontend.outputs.digest }}
         run: |
           set -euo pipefail
-          : "${BACKEND_DIGEST:?Backend image digest was not produced}"
-          : "${FRONTEND_DIGEST:?Frontend image digest was not produced}"
+          : "${BACKEND_DIGEST:?Backend build did not produce a digest}"
+          : "${FRONTEND_DIGEST:?Frontend build did not produce a digest}"
 
           backend_image="${ACR_LOGIN_SERVER}/novacart-backend@${BACKEND_DIGEST}"
           frontend_image="${ACR_LOGIN_SERVER}/novacart-frontend@${FRONTEND_DIGEST}"
+          stable_percent=$((100 - CANARY_PERCENT))
 
-          # Deploy the backend first so the frontend targets the intended API version.
-          az containerapp update \
-            --name "$BACKEND_APP_NAME" \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --image "$backend_image" \
-            --output none
+          wait_for_candidate() {
+            local app="$1"
+            local previous="$2"
+            local candidate="" provisioning="" running="" health=""
+            for attempt in $(seq 1 36); do
+              candidate="$(az containerapp show --name "$app" --resource-group "$AZURE_RESOURCE_GROUP" --query properties.latestRevisionName --output tsv 2>/dev/null || true)"
+              if [[ -n "$candidate" && "$candidate" != "None" && "$candidate" != "$previous" ]]; then
+                provisioning="$(az containerapp revision show --name "$app" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$candidate" --query properties.provisioningState --output tsv 2>/dev/null || true)"
+                running="$(az containerapp revision show --name "$app" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$candidate" --query properties.runningState --output tsv 2>/dev/null || true)"
+                health="$(az containerapp revision show --name "$app" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$candidate" --query properties.healthState --output tsv 2>/dev/null || true)"
+                if [[ "$provisioning" == "Provisioned" && "$running" == "Running" && "$health" == "Healthy" ]]; then
+                  echo "$candidate"
+                  return 0
+                fi
+                if [[ "$provisioning" == "Failed" || "$running" == "Failed" || "$health" == "Unhealthy" ]]; then
+                  echo "::error::Candidate $candidate for $app failed platform health checks (provisioning=$provisioning running=$running health=$health)."
+                  return 1
+                fi
+              fi
+              sleep 10
+            done
+            echo "::error::Timed out waiting for a healthy candidate revision for $app."
+            return 1
+          }
 
-          az containerapp update \
-            --name "$FRONTEND_APP_NAME" \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
-            --image "$frontend_image" \
-            --output none
+          validate_critical_path() {
+            local cycle
+            for cycle in $(seq 1 15); do
+              curl --fail --silent --show-error --max-time 10 "$FRONTEND_URL/" | grep -Eqi '<html|<!doctype'
+              curl --fail --silent --show-error --max-time 10 "$FRONTEND_URL/api/health" | jq -e '.status == "ok"' >/dev/null
+              curl --fail --silent --show-error --max-time 10 "$FRONTEND_URL/api/ready" | jq -e '.status == "ready"' >/dev/null
+              curl --fail --silent --show-error --max-time 10 "$FRONTEND_URL/api/products" | jq -e 'type == "array" and length >= 1' >/dev/null
+            done
+          }
 
-          # Verify that Azure reports the exact digest-based image configured for each app.
-          for attempt in $(seq 1 12); do
-            actual_backend="$(az containerapp show --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[?name=='novacart-backend'].image | [0]" --output tsv)"
-            actual_frontend="$(az containerapp show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[?name=='novacart-frontend'].image | [0]" --output tsv)"
-            if [[ "$actual_backend" == "$backend_image" && "$actual_frontend" == "$frontend_image" ]]; then
-              break
-            fi
-            if [[ "$attempt" -eq 12 ]]; then
-              echo "::error::Azure did not report the expected image digests after the update."
-              echo "Backend image: $actual_backend"
-              echo "Frontend image: $actual_frontend"
-              exit 1
-            fi
-            sleep 5
+          observe_candidate() {
+            local cycle
+            for cycle in $(seq 1 "$((OBSERVATION_MINUTES * 6))"); do
+              curl --fail --silent --show-error --max-time 10 "$FRONTEND_URL/api/health" | jq -e '.status == "ok"' >/dev/null
+              curl --fail --silent --show-error --max-time 10 "$FRONTEND_URL/api/ready" | jq -e '.status == "ready"' >/dev/null
+              sleep 10
+            done
+          }
+
+          echo "Deploying backend candidate by immutable digest: $backend_image"
+          az containerapp update --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --image "$backend_image" --output none
+          new_backend_rev="$(wait_for_candidate "$BACKEND_APP_NAME" "$OLD_BACKEND_REV")"
+          az containerapp ingress traffic set --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision-weight "$OLD_BACKEND_REV=$stable_percent" "$new_backend_rev=$CANARY_PERCENT" --output none
+          echo "Backend canary: $OLD_BACKEND_REV=$stable_percent%, $new_backend_rev=$CANARY_PERCENT%."
+          validate_critical_path
+          observe_candidate
+          az containerapp ingress traffic set --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision-weight "$new_backend_rev=100" --output none
+
+          echo "Deploying frontend candidate by immutable digest: $frontend_image"
+          az containerapp update --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --image "$frontend_image" --output none
+          new_frontend_rev="$(wait_for_candidate "$FRONTEND_APP_NAME" "$OLD_FRONTEND_REV")"
+          az containerapp ingress traffic set --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision-weight "$OLD_FRONTEND_REV=$stable_percent" "$new_frontend_rev=$CANARY_PERCENT" --output none
+          echo "Frontend canary: $OLD_FRONTEND_REV=$stable_percent%, $new_frontend_rev=$CANARY_PERCENT%."
+          validate_critical_path
+          observe_candidate
+
+          # Promote only after the candidate has passed platform health, smoke checks, and a short observation window.
+          az containerapp ingress traffic set --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision-weight "$new_frontend_rev=100" --output none
+
+          # Keep the last known-good revision inactive for later reactivation, avoiding idle replica cost.
+          az containerapp revision deactivate --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$OLD_BACKEND_REV" --output none
+          az containerapp revision deactivate --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$OLD_FRONTEND_REV" --output none
+
+          # Confirm the promoted pair still serves the critical path after the previous pair is deactivated.
+          validate_critical_path
+
+          {
+            echo "backend_revision=$new_backend_rev"
+            echo "frontend_revision=$new_frontend_rev"
+            echo "backend_image=$backend_image"
+            echo "frontend_image=$frontend_image"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Roll back to the previously known-good revisions on failure
+        if: failure() && steps.azure_login.outcome == 'success' && steps.capture_stable.outcome == 'success'
+        shell: bash
+        env:
+          FRONTEND_URL: ${{ steps.preflight.outputs.frontend_url }}
+          OLD_BACKEND_REV: ${{ steps.capture_stable.outputs.backend_revision }}
+          OLD_FRONTEND_REV: ${{ steps.capture_stable.outputs.frontend_revision }}
+        run: |
+          set -euo pipefail
+          echo "::warning::Deployment validation failed. Restoring the previous revision pair."
+
+          az containerapp revision activate --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$OLD_BACKEND_REV" --output none
+          az containerapp revision activate --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$OLD_FRONTEND_REV" --output none
+
+          wait_for_healthy_revision() {
+            local app="$1" revision="$2"
+            for attempt in $(seq 1 36); do
+              provisioning="$(az containerapp revision show --name "$app" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$revision" --query properties.provisioningState --output tsv 2>/dev/null || true)"
+              running="$(az containerapp revision show --name "$app" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$revision" --query properties.runningState --output tsv 2>/dev/null || true)"
+              health="$(az containerapp revision show --name "$app" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$revision" --query properties.healthState --output tsv 2>/dev/null || true)"
+              if [[ "$provisioning" == "Provisioned" && "$running" == "Running" && "$health" == "Healthy" ]]; then
+                return 0
+              fi
+              sleep 10
+            done
+            echo "::error::Previous revision $revision for $app did not become healthy."
+            return 1
+          }
+
+          wait_for_healthy_revision "$BACKEND_APP_NAME" "$OLD_BACKEND_REV"
+          wait_for_healthy_revision "$FRONTEND_APP_NAME" "$OLD_FRONTEND_REV"
+
+          az containerapp ingress traffic set --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision-weight "$OLD_BACKEND_REV=100" --output none
+          az containerapp ingress traffic set --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision-weight "$OLD_FRONTEND_REV=100" --output none
+
+          for attempt in $(seq 1 10); do
+            curl --fail --silent --show-error --max-time 10 "$FRONTEND_URL/api/health" | jq -e '.status == "ok"' >/dev/null
+            curl --fail --silent --show-error --max-time 10 "$FRONTEND_URL/api/ready" | jq -e '.status == "ready"' >/dev/null
+            curl --fail --silent --show-error --max-time 10 "$FRONTEND_URL/api/products" | jq -e 'type == "array" and length >= 1' >/dev/null
+            sleep 2
           done
 
-          backend_revision="$(az containerapp revision list --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "[?properties.active == `true`].name | [0]" --output tsv)"
-          frontend_revision="$(az containerapp revision list --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "[?properties.active == `true`].name | [0]" --output tsv)"
+          echo "::notice::Rollback completed and the previous revision pair passed health/readiness/product checks."
 
-          echo "backend_image=$backend_image" >> "$GITHUB_OUTPUT"
-          echo "frontend_image=$frontend_image" >> "$GITHUB_OUTPUT"
-          echo "backend_revision=$backend_revision" >> "$GITHUB_OUTPUT"
-          echo "frontend_revision=$frontend_revision" >> "$GITHUB_OUTPUT"
-
-      - name: Publish deployment summary
+      - name: Publish release evidence
         if: always()
         shell: bash
         env:
-          BACKEND_IMAGE: ${{ steps.deploy_images.outputs.backend_image }}
-          FRONTEND_IMAGE: ${{ steps.deploy_images.outputs.frontend_image }}
-          BACKEND_REVISION: ${{ steps.deploy_images.outputs.backend_revision }}
-          FRONTEND_REVISION: ${{ steps.deploy_images.outputs.frontend_revision }}
+          OLD_BACKEND_REV: ${{ steps.capture_stable.outputs.backend_revision }}
+          OLD_FRONTEND_REV: ${{ steps.capture_stable.outputs.frontend_revision }}
+          OLD_BACKEND_IMAGE: ${{ steps.capture_stable.outputs.backend_image }}
+          OLD_FRONTEND_IMAGE: ${{ steps.capture_stable.outputs.frontend_image }}
+          NEW_BACKEND_REV: ${{ steps.rollout.outputs.backend_revision }}
+          NEW_FRONTEND_REV: ${{ steps.rollout.outputs.frontend_revision }}
+          NEW_BACKEND_IMAGE: ${{ steps.rollout.outputs.backend_image }}
+          NEW_FRONTEND_IMAGE: ${{ steps.rollout.outputs.frontend_image }}
         run: |
           {
-            echo "## NovaCart Azure DEV deployment"
+            echo "## NovaCart controlled DEV release"
             echo
             echo "- **Result:** ${{ job.status }}"
-            echo "- **Source commit:** [${GITHUB_SHA}]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA)"
-            echo "- **Workflow run:** [$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
-            echo "- **Resource group:** ${AZURE_RESOURCE_GROUP}"
-            echo "- **Backend image:** ${BACKEND_IMAGE:-not published/deployed}"
-            echo "- **Backend revision:** ${BACKEND_REVISION:-not verified}"
-            echo "- **Frontend image:** ${FRONTEND_IMAGE:-not published/deployed}"
-            echo "- **Frontend revision:** ${FRONTEND_REVISION:-not verified}"
+            echo "- **Source commit:** [${GITHUB_SHA}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA})"
+            echo "- **Workflow run:** [${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})"
+            echo "- **Environment:** azure-development"
+            echo "- **Canary share:** ${CANARY_PERCENT}%"
+            echo "- **Observation window per app:** ${OBSERVATION_MINUTES} minute(s)"
+            echo "- **Previous backend:** ${OLD_BACKEND_REV:-not captured} — ${OLD_BACKEND_IMAGE:-not captured}"
+            echo "- **Previous frontend:** ${OLD_FRONTEND_REV:-not captured} — ${OLD_FRONTEND_IMAGE:-not captured}"
+            echo "- **Candidate backend:** ${NEW_BACKEND_REV:-not promoted} — ${NEW_BACKEND_IMAGE:-not promoted}"
+            echo "- **Candidate frontend:** ${NEW_FRONTEND_REV:-not promoted} — ${NEW_FRONTEND_IMAGE:-not promoted}"
+            echo "- **Rollback:** the workflow attempts to restore both previous revisions if rollout validation fails."
           } >> "$GITHUB_STEP_SUMMARY"
