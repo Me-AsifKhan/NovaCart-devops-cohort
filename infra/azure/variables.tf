@@ -150,3 +150,70 @@ variable "app_environment" {
   type        = string
   default     = "development"
 }
+
+ 
+variable "backend_min_replicas" {
+  description = "Minimum backend replicas per active revision. A value of 1 avoids scale-from-zero latency; costs more during a release while old and new revisions overlap."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.backend_min_replicas >= 0 && var.backend_min_replicas <= 10 && var.backend_min_replicas == floor(var.backend_min_replicas)
+    error_message = "backend_min_replicas must be an integer between 0 and 10."
+  }
+}
+
+variable "backend_max_replicas" {
+  description = "Bounded DEV maximum for backend replicas; raise only after database connection capacity and load tests justify it."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.backend_max_replicas >= 1 && var.backend_max_replicas <= 10 && var.backend_max_replicas == floor(var.backend_max_replicas) && var.backend_max_replicas >= var.backend_min_replicas
+    error_message = "backend_max_replicas must be an integer from backend_min_replicas through 10."
+  }
+}
+
+variable "frontend_min_replicas" {
+  description = "Minimum frontend replicas per active revision; one warm replica avoids cold-start latency and increases temporary blue/green release cost."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.frontend_min_replicas >= 0 && var.frontend_min_replicas <= 10 && var.frontend_min_replicas == floor(var.frontend_min_replicas)
+    error_message = "frontend_min_replicas must be an integer between 0 and 10."
+  }
+}
+
+variable "frontend_max_replicas" {
+  description = "Bounded DEV maximum for stateless Nginx frontend replicas."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.frontend_max_replicas >= 1 && var.frontend_max_replicas <= 10 && var.frontend_max_replicas == floor(var.frontend_max_replicas) && var.frontend_max_replicas >= var.frontend_min_replicas
+    error_message = "frontend_max_replicas must be an integer from frontend_min_replicas through 10."
+  }
+}
+
+variable "backend_http_concurrency_target" {
+  description = "HTTP concurrent-request target per backend replica. Initial starting point only; tune after load testing and PostgreSQL connection-capacity review."
+  type        = number
+  default     = 25
+
+  validation {
+    condition     = var.backend_http_concurrency_target >= 1 && var.backend_http_concurrency_target <= 1000
+    error_message = "backend_http_concurrency_target must be between 1 and 1000."
+  }
+}
+
+variable "frontend_http_concurrency_target" {
+  description = "HTTP concurrent-request target per frontend replica. Initial starting point only; tune after load testing."
+  type        = number
+  default     = 50
+
+  validation {
+    condition     = var.frontend_http_concurrency_target >= 1 && var.frontend_http_concurrency_target <= 1000
+    error_message = "frontend_http_concurrency_target must be between 1 and 1000."
+  }
+}
