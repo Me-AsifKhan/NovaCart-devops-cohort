@@ -9,7 +9,9 @@ from app.main import app
 
 def test_health_products_and_orders_persist():
     with TestClient(app) as c:
-        assert c.get('/health').status_code == 200
+        health = c.get("/health")
+        assert health.status_code == 200
+        assert health.headers["x-novacart-revision"] == os.getenv("CONTAINER_APP_REVISION", "local")
         assert c.get('/ready').status_code == 200
         r = c.get('/api/products')
         assert r.status_code == 200
@@ -32,3 +34,15 @@ def test_health_products_and_orders_persist():
         assert len(saved_orders) == 1
         assert saved_orders[0]['order_ref'] == order['order_ref']
         assert saved_orders[0]['items'][0]['quantity'] == 2
+
+def test_prometheus_metrics_endpoint():
+    with TestClient(app) as c:
+        # Generate a normal request so the request metric has a sample.
+        assert c.get("/health").status_code == 200
+
+        response = c.get("/metrics")
+        assert response.status_code == 200
+        assert "text/plain" in response.headers["content-type"]
+        assert "http_requests_total" in response.text
+        assert "http_request_duration_seconds" in response.text
+        assert 'handler="/health"' in response.text
