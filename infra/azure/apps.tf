@@ -100,6 +100,10 @@ resource "azurerm_container_app" "backend" {
         name  = "LOG_LEVEL"
         value = "INFO"
       }
+      env {
+        name  = "DATABASE_POOL_MAX_SIZE"
+        value = tostring(var.database_pool_max_size)
+      }
     }
   }
 
