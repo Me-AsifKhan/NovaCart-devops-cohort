@@ -87,7 +87,7 @@ The deployment workflow uses **multi-revision, health-gated, blue/green-like cut
 1. Identify the revisions/images currently receiving 100% of traffic and record them.
 2. Build/push commit-tagged images and capture immutable registry digests.
 3. Create a uniquely suffixed backend candidate while the old frontend remains stable.
-4. Wait for the candidate revision's platform readiness, route backend traffic to it, and test the current public frontend's health/readiness/products paths.
+4. Wait for the candidate revision's platform readiness, send a small 5/10/20% weighted backend canary while the known-good revision retains the rest, and repeat public frontend health/readiness/products checks during the 30/60/120-second observation window. Route 100% to the candidate only if all checks pass.
 5. Create a frontend candidate, add a candidate label URL and test that URL directly before changing production frontend traffic.
 6. Promote the frontend only after those candidate checks succeed; test the production URL again.
 7. If any step after a traffic shift fails, the workflow attempts to restore both old revision targets and fails the run. It records whether rollback succeeded.
