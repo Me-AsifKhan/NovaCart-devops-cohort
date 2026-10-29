@@ -4,7 +4,7 @@
 
 Give the NovaCart team a small, actionable operating model for detecting risky releases, identifying what is running, and rolling back safely. Alerts should indicate customer or service risk, not merely that a metric moved.
 
-**Current implementation boundary (2026-10-29):** GitHub Actions OIDC and remote-state access passed a test on 2026-10-27, before the remote-state Storage Account was deleted on 2026-10-29. No NovaCart Azure application infrastructure is currently present. The thresholds and release controls below are the documented operating standard to implement and tune when the application is redeployed; they are not active alert rules or proof of live rollback capability.
+**Current implementation boundary (2026-10-29):** GitHub Actions OIDC and remote-state access passed a test on 2026-10-27, before the remote-state Storage Account was deleted on 2026-10-29. No NovaCart Azure application infrastructure is currently present. The local Compose observability work adds Prometheus alert rules for practice, but this guide's proposed thresholds are not active Azure/production alerts, and no external notification route or live rollback has been proven.
 
 ## 1. Signals and Initial Alert Thresholds
 

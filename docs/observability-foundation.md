@@ -6,6 +6,21 @@ NovaCart should be diagnosable through a small set of useful logs, health checks
 
 **Current live status (2026-10-29):** the Azure lab resources, including the Terraform-state Storage Account, were intentionally deleted to control cost. The post-cleanup inventory showed no resource groups or Azure resources in the selected subscription. No live NovaCart Container Apps, PostgreSQL server, ACR, Log Analytics workspace, or Application Insights resource remains. There is no currently active Azure telemetry pipeline or alert; provisioning and runtime verification are future work.
 
+## Local observability implementation
+
+The repository now includes an optional local telemetry stack in `novacart/compose.yaml`:
+
+- FastAPI exposes `/metrics` using the pinned official `prometheus-client` library and a small middleware. The metrics endpoint is excluded from request metrics, route templates are used instead of raw paths, and unknown paths are grouped as `unmatched` to limit label cardinality.
+- Prometheus scrapes `backend:8080/metrics` every 15 seconds and retains local time series for three days.
+- Grafana provisions a Prometheus data source and a dashboard for request rate, 5xx ratio, p95 latency, and scrape availability.
+- Prometheus evaluates two local alert rules: the backend target is unavailable for one minute, or the 5xx ratio exceeds 5% for three minutes with at least 20 requests in the five-minute window.
+- Prometheus and Grafana host ports bind to loopback only. The backend metrics endpoint is not published as a host port.
+- Grafana requires `GRAFANA_ADMIN_PASSWORD` at Compose startup. Supply a local-only password through the current shell; do not commit it.
+
+This lab creates no Azure resources and incurs no Azure charges. It uses local Docker resources and disk. The local Prometheus alert rules become visible in the Prometheus UI, but this configuration does **not** yet route notifications to email, Slack, PagerDuty, or another external receiver. It is a useful local practice/validation layer, not a substitute for Azure Log Analytics or an active production alerting pipeline.
+
+Follow [the local observability lab](local-observability-lab.md) for the startup procedure, tests, safe alert drill, and cleanup steps. Do not claim the lab passed on your laptop until you run those steps and inspect the results.
+
 ## 1. Current signals available in the application
 
 The FastAPI backend configures Python logging to stdout. Its current log events include:
