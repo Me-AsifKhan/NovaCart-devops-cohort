@@ -127,8 +127,6 @@ def _open_connection():
             conn.close()
         return
 
-    import psycopg
-
     with _get_postgres_pool().connection(timeout=5) as conn:
         yield conn
 
