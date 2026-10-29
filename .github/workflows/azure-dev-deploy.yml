@@ -197,7 +197,7 @@ jobs:
                 --resource-group "$AZURE_RESOURCE_GROUP" \
                 --revision-weight "${OLD_BACKEND_REVISION}=100" \
                 --output none; then
-                echo "- Backend traffic restored to `${OLD_BACKEND_REVISION}`." >> "$GITHUB_STEP_SUMMARY"
+                printf -- '- Backend traffic restored to `%s`.\n' "$OLD_BACKEND_REVISION" >> "$GITHUB_STEP_SUMMARY"
               else
                 echo "::error::Could not restore backend traffic automatically; use the runbook and inspect the app now."
                 echo "- **Backend rollback:** FAILED — operator action required." >> "$GITHUB_STEP_SUMMARY"
@@ -208,7 +208,7 @@ jobs:
                 --resource-group "$AZURE_RESOURCE_GROUP" \
                 --revision-weight "${OLD_FRONTEND_REVISION}=100" \
                 --output none; then
-                echo "- Frontend traffic restored to `${OLD_FRONTEND_REVISION}`." >> "$GITHUB_STEP_SUMMARY"
+                printf -- '- Frontend traffic restored to `%s`.\n' "$OLD_FRONTEND_REVISION" >> "$GITHUB_STEP_SUMMARY"
               else
                 echo "::error::Could not restore frontend traffic automatically; use the runbook and inspect the app now."
                 echo "- **Frontend rollback:** FAILED — operator action required." >> "$GITHUB_STEP_SUMMARY"
