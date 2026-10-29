@@ -235,6 +235,12 @@ jobs:
                 fi
               fi
               if az containerapp revision show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$NEW_FRONTEND_REVISION" --output none 2>/dev/null; then
+                # Remove its candidate label before deactivating the candidate revision.
+                if az containerapp revision label remove --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --label candidate --only-show-errors; then
+                  echo "- Candidate frontend label removed." >> "$GITHUB_STEP_SUMMARY"
+                else
+                  echo "- No candidate label was attached to the new frontend revision." >> "$GITHUB_STEP_SUMMARY"
+                fi
                 if az containerapp revision deactivate --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$NEW_FRONTEND_REVISION" --output none; then
                   echo "- Candidate frontend deactivated after rollback/no-cutover." >> "$GITHUB_STEP_SUMMARY"
                 else
