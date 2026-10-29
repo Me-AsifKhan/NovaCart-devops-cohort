@@ -332,7 +332,7 @@ jobs:
             health="$(curl --fail --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors --max-time 15 --dump-header "$health_headers" "${url}/api/health")"
             jq -e '.status == "ok"' <<< "$health" > /dev/null
 
-            served_revision="$(awk -F': *' 'tolower($1) == "x-novacart-revision:" { gsub("\\r", "", $2); value = $2 } END { print value }' "$health_headers")"
+            served_revision="$(awk -F': *' 'tolower($1) == "x-novacart-revision:" { gsub(sprintf("%c", 13), "", $2); value = $2 } END { print value }' "$health_headers")"
             rm -f "$health_headers"
             if [[ "$served_revision" == "${NEW_BACKEND_REVISION}" ]]; then
               BACKEND_CANDIDATE_HITS=$((BACKEND_CANDIDATE_HITS + 1))
