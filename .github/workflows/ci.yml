@@ -34,7 +34,17 @@ jobs:
         run: terraform -chdir=infra/azure validate
 
       - name: Validate Docker Compose configuration
+        env:
+          GRAFANA_ADMIN_PASSWORD: ci-only-not-for-reuse
         run: docker compose -f novacart/compose.yaml config --quiet
+      - name: Validate Prometheus config and alert rules
+        run: |
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/novacart/observability:/etc/prometheus:ro" \
+            prom/prometheus:v3.15.1 check config /etc/prometheus/prometheus.yml
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/novacart/observability:/etc/prometheus:ro" \
+            prom/prometheus:v3.15.1 check rules /etc/prometheus/alerts.yml
       - name: Verify frontend structural assets
         run: |
           set -eu
@@ -46,6 +56,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Validate Grafana dashboard JSON
+        run: python -m json.tool novacart/observability/grafana/dashboards/novacart-overview.json > /dev/null
 
       - name: Install backend dependencies
         working-directory: novacart/backend

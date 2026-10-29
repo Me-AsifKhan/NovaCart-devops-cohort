@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from starlette.responses import Response
 
 app = FastAPI(title="NovaCart API", version="1.0.0")
 app.add_middleware(
@@ -19,6 +21,46 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Bounded-cardinality metrics: use route templates, never raw URLs or query strings.
+HTTP_REQUESTS = Counter(
+    "http_requests",
+    "Total HTTP requests handled by NovaCart.",
+    ("handler", "method", "status"),
+)
+HTTP_REQUEST_DURATION = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request duration in seconds.",
+    ("handler", "method"),
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+)
+
+
+@app.middleware("http")
+async def collect_request_metrics(request: Request, call_next):
+    # Do not count Prometheus scrapes as business/API traffic.
+    if request.url.path == "/metrics":
+        return await call_next(request)
+
+    started = time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        route = request.scope.get("route")
+        handler = getattr(route, "path", "unmatched")
+        if not isinstance(handler, str) or not handler.startswith("/"):
+            handler = "unmatched"
+        status_group = f"{status_code // 100}xx"
+        HTTP_REQUESTS.labels(handler, request.method, status_group).inc()
+        HTTP_REQUEST_DURATION.labels(handler, request.method).observe(time.perf_counter() - started)
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics():
+    return Response(content=generate_latest(), headers={"Content-Type": CONTENT_TYPE_LATEST})
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./novacart.db")
 APP_ENV = os.getenv("APP_ENV", "development")

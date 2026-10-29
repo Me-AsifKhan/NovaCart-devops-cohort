@@ -1,0 +1,27 @@
+groups:
+  - name: novacart-local-service
+    rules:
+      - alert: NovaCartBackendTargetDown
+        expr: up{job="novacart-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "NovaCart backend metrics target is down"
+          description: "Prometheus has failed to scrape the backend for at least one minute. Check the backend container health and recent logs."
+
+      - alert: NovaCartHigh5xxRate
+        expr: |
+          (
+            sum(rate(http_requests_total{job="novacart-backend", status="5xx"}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total{job="novacart-backend"}[5m])), 0.001)
+          ) > 0.05
+          and
+          sum(increase(http_requests_total{job="novacart-backend"}[5m])) >= 20
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "NovaCart backend 5xx ratio is above 5%"
+          description: "More than 5% of backend requests failed with 5xx responses for 3 minutes, with at least 20 requests in the five-minute window. Check the release version, dependency readiness, and backend logs."
