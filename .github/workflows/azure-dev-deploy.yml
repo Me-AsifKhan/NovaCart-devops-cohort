@@ -178,9 +178,11 @@ jobs:
 
           rollback_on_error() {
             local exit_code="$1"
+            local backend_restored=false
+            local frontend_restored=false
             trap - ERR
             set +e
-            echo "::error::Release validation failed. Restoring the previous known-good revisions."
+            echo "::error::Release validation failed. Attempting to restore the previous known-good revisions."
             {
               echo
               echo "### Rollout failure and rollback"
@@ -197,6 +199,7 @@ jobs:
                 --resource-group "$AZURE_RESOURCE_GROUP" \
                 --revision-weight "${OLD_BACKEND_REVISION}=100" \
                 --output none; then
+                backend_restored=true
                 printf -- '- Backend traffic restored to `%s`.\n' "$OLD_BACKEND_REVISION" >> "$GITHUB_STEP_SUMMARY"
               else
                 echo "::error::Could not restore backend traffic automatically; use the runbook and inspect the app now."
@@ -208,13 +211,39 @@ jobs:
                 --resource-group "$AZURE_RESOURCE_GROUP" \
                 --revision-weight "${OLD_FRONTEND_REVISION}=100" \
                 --output none; then
+                frontend_restored=true
                 printf -- '- Frontend traffic restored to `%s`.\n' "$OLD_FRONTEND_REVISION" >> "$GITHUB_STEP_SUMMARY"
               else
                 echo "::error::Could not restore frontend traffic automatically; use the runbook and inspect the app now."
                 echo "- **Frontend rollback:** FAILED — operator action required." >> "$GITHUB_STEP_SUMMARY"
               fi
             else
+              backend_restored=true
+              frontend_restored=true
               echo "- Production traffic was not changed before failure; the existing revisions remain the intended production targets." >> "$GITHUB_STEP_SUMMARY"
+            fi
+
+            # Stop candidate replicas only after old traffic is known to be restored.
+            # If any restore leg failed, leave candidates available for operator diagnosis.
+            if [[ "$backend_restored" == "true" && "$frontend_restored" == "true" ]]; then
+              if az containerapp revision show --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$NEW_BACKEND_REVISION" --output none 2>/dev/null; then
+                if az containerapp revision deactivate --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$NEW_BACKEND_REVISION" --output none; then
+                  echo "- Candidate backend deactivated after rollback/no-cutover." >> "$GITHUB_STEP_SUMMARY"
+                else
+                  echo "::warning::Could not deactivate candidate backend; review temporary replica cost."
+                  echo "- **Cleanup warning:** candidate backend may remain active." >> "$GITHUB_STEP_SUMMARY"
+                fi
+              fi
+              if az containerapp revision show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$NEW_FRONTEND_REVISION" --output none 2>/dev/null; then
+                if az containerapp revision deactivate --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$NEW_FRONTEND_REVISION" --output none; then
+                  echo "- Candidate frontend deactivated after rollback/no-cutover." >> "$GITHUB_STEP_SUMMARY"
+                else
+                  echo "::warning::Could not deactivate candidate frontend; review temporary replica cost."
+                  echo "- **Cleanup warning:** candidate frontend may remain active." >> "$GITHUB_STEP_SUMMARY"
+                fi
+              fi
+            else
+              echo "- Candidate revisions were left available because at least one rollback leg failed; manual intervention is required." >> "$GITHUB_STEP_SUMMARY"
             fi
             exit "$exit_code"
           }
@@ -305,7 +334,16 @@ jobs:
             --output none
           wait_for_revision "$FRONTEND_APP_NAME" "$NEW_FRONTEND_REVISION"
 
-          # A revision label gives the candidate a dedicated URL while production still uses the old revision.
+          # Refresh the candidate label on reruns without touching main production traffic.
+          if az containerapp revision label remove \
+            --name "$FRONTEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --label candidate \
+            --only-show-errors; then
+            echo "Removed the previous candidate label."
+          else
+            echo "No prior candidate label to remove."
+          fi
           az containerapp revision label add \
             --name "$FRONTEND_APP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
