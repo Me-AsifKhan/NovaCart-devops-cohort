@@ -94,7 +94,7 @@ Keep evidence free of credentials, tokens, connection strings, customer data and
 ## Current limitations
 
 - The Azure runtime and remote state backend were deleted on 2026-10-29. This runbook cannot be exercised against a live app until a deliberate, cost-approved rebuild.
-- The current deployment workflow historically updated app images sequentially and verified configured digests, but did not prove application-level health or an automatic rollback.
+- The DEVOPS-019 branch changes the Terraform app revision mode to Multiple and adds post-update frontend/API smoke checks plus a best-effort rollback attempt to the previously recorded image references. This behavior has not been live-tested because Azure is torn down. A rollback attempt is not a guarantee of recovery; verify the final running images and smoke checks.
 - The Terraform app configuration must be changed to multiple-revision mode before revision traffic control can be relied on.
 - There is no verified active Azure alert notification route or load-test baseline.
 - This review is documentation for DEVOPS-019; no live cloud deployment was performed.
