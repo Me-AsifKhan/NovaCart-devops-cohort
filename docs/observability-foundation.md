@@ -4,7 +4,7 @@
 
 NovaCart should be diagnosable through a small set of useful logs, health checks, metrics, and actionable alerts. This document distinguishes what exists in source/configuration from what has been verified in a live deployment.
 
-**Current live status:** the recent Azure subscription inventory showed only the Terraform-state Storage Account. No NovaCart Container Apps, PostgreSQL server, ACR, Log Analytics workspace, or Application Insights resource was present. Therefore no live application telemetry pipeline or alert is currently proven active. Provisioning and runtime verification are future work.
+**Current live status (2026-10-29):** the Azure lab resources, including the Terraform-state Storage Account, were intentionally deleted to control cost. The post-cleanup inventory showed no resource groups or Azure resources in the selected subscription. No live NovaCart Container Apps, PostgreSQL server, ACR, Log Analytics workspace, or Application Insights resource remains. There is no currently active Azure telemetry pipeline or alert; provisioning and runtime verification are future work.
 
 ## 1. Current signals available in the application
 
@@ -119,4 +119,4 @@ Azure Monitor costs depend on log ingestion, retention, and feature usage. A def
 
 ## Readiness statement
 
-The code emits useful stdout logs and implements `/health` and database-backed `/ready` checks. Terraform defines a Log Analytics workspace and links the Container Apps environment to it. However, the latest Azure inventory contained no application runtime or workspace, and no live alert or telemetry query has been verified. DEVOPS-016 is therefore **partially designed but not fully implemented or live-verified**.
+The code emits useful stdout logs and implements `/health` and database-backed `/ready` checks. Terraform defines a Log Analytics workspace and links the Container Apps environment to it. However, the application runtime, Log Analytics workspace, and state Storage Account were removed on 2026-10-29. No live alert, workspace query, dashboard, or telemetry pipeline has been verified after teardown. DEVOPS-016 is therefore **documented and partially implemented in application code, but not fully live-verified**.

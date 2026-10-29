@@ -28,6 +28,8 @@ Use a password with at least 16 characters. Terraform state contains the generat
 
 Terraform creates the registry and platform first with `deploy_application=false`. Images must exist in ACR before Container Apps can start.
 
+**Backend/state warning (2026-10-29):** the Azure Storage backend was deleted to control cost. The sample commands below use `terraform init -backend=false`, which uses local state; they are not a substitute for the shared remote backend. Do not treat a local-state run as synchronized with GitHub Actions. Re-bootstrap and verify the remote backend before using the OIDC/plan workflows or managing a shared environment.
+
 ```powershell
 Set-Location .\infra\azure
 terraform fmt -recursive
@@ -47,7 +49,7 @@ Set-Location ..\..
 $acrHost = "<acr-name>.azurecr.io"
 az acr login --name "<acr-name>"
 docker build -t "$acrHost/novacart-backend:devops-009" .\novacart\backend
-docker build -t "$acrHost/novacart-frontend:devops-009" .\novacart\frontend
+docker build -t "$acrHost/novacart-frontend:devops-009-fix2" .\novacart\frontend
 docker push "$acrHost/novacart-backend:devops-009"
 docker push "$acrHost/novacart-frontend:devops-009-fix2"
 ```
@@ -76,7 +78,7 @@ Invoke-RestMethod "$url/api/ready"
 Invoke-RestMethod "$url/api/products"
 Invoke-RestMethod "$url/api/runtime"
 ```
-Also place a test order through the UI and confirm it appears in order history. The backend's `/ready` endpoint checks database connectivity. **Current DEVOPS-009 development compromise:** the deployed PostgreSQL server uses `allow-azure-services-dev` (`0.0.0.0` to `0.0.0.0`) because Container Apps has many possible outbound IPs. This permits Azure services—including services in other customers' subscriptions—to attempt connections. It is broader than the source-IP allowlist originally designed and is not appropriate for production. DEVOPS-011 must remove public PostgreSQL exposure and verify the private path. The old `backend_egress` loop that attempted hundreds of individual rules has been removed from the current configuration.
+Also place a test order through the UI and confirm it appears in order history. The backend's `/ready` endpoint checks database connectivity. **Historical DEVOPS-009 security note:** the deployment recorded above used the development-only `allow-azure-services-dev` firewall rule (`0.0.0.0` to `0.0.0.0`). That rule was broad and not production-safe. DEVOPS-011 later added a private-network Terraform design, but the private mode was not live-applied and verified. The Azure resources were deleted on 2026-10-29, so neither the old public path nor the intended private path should be described as a currently running environment.
 
 ## Recorded deployment verification — 2026-10-26
 
@@ -97,9 +99,10 @@ The expected public endpoint is the Terraform output `frontend_url`. The backend
 
 ## Evidence status
 
-- Repository configuration and Terraform validation: record results after local checks.
-- Azure resource creation, public URL, API behavior, database persistence, and browser verification: **not verified until performed against an active subscription**.
-- Cost: estimate with the Azure Pricing Calculator and confirm subscription budget before applying. Budget alerts are not spending caps.
+- **Historical live verification:** the recorded 2026-10-26 apply and endpoint/API checks above passed at that time.
+- **Current availability:** the lab resources were intentionally deleted on 2026-10-29. The recorded frontend URL is not an active endpoint, and the environment has not been redeployed since teardown.
+- **Private networking:** Terraform configuration exists, but the private database route was not live-verified before teardown.
+- **Cost:** estimate with the Azure Pricing Calculator and confirm the subscription budget before any rebuild. Budget alerts are not spending caps.
 
 ## Cleanup
 

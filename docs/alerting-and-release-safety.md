@@ -4,7 +4,7 @@
 
 Give the NovaCart team a small, actionable operating model for detecting risky releases, identifying what is running, and rolling back safely. Alerts should indicate customer or service risk, not merely that a metric moved.
 
-**Current implementation boundary:** the GitHub Actions Azure OIDC/backend test has passed, but no NovaCart application infrastructure is currently present in the Azure subscription inventory. The thresholds and release controls below are the proposed operating standard to implement and tune when the application is deployed; do not treat them as already active alerts or proven live rollback capability.
+**Current implementation boundary (2026-10-29):** GitHub Actions OIDC and remote-state access passed a test on 2026-10-27, before the remote-state Storage Account was deleted on 2026-10-29. No NovaCart Azure application infrastructure is currently present. The thresholds and release controls below are the documented operating standard to implement and tune when the application is redeployed; they are not active alert rules or proof of live rollback capability.
 
 ## 1. Signals and Initial Alert Thresholds
 
@@ -94,4 +94,4 @@ If telemetry or deployment records are not available yet, mark the check **not i
 
 ## Current Readiness
 
-This document defines the operational approach; it does not itself provision monitoring, create alerts, or prove that application rollback is available. The current Azure inventory showed only the Terraform-state Storage Account, with no NovaCart Container Registry or application runtime resources. Implement and verify the relevant alerts, telemetry, release records, and rollback procedure when the application deployment workflow and runtime are introduced.
+This document defines the operating approach; it does not itself provision monitoring, create alerts, or prove that application rollback is available. The Azure lab resources, including the Terraform-state Storage Account, were deleted on 2026-10-29. Implement and verify the relevant alerts, telemetry, release records, and rollback procedure after the application infrastructure is intentionally rebuilt.

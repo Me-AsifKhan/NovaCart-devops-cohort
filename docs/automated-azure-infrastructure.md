@@ -1,109 +1,69 @@
-# Automated Azure Infrastructure
+# Automated Azure Infrastructure — DEVOPS-013
 
-## Purpose
+## Current status — 2026-10-29
 
-Validate Terraform changes in GitHub Actions and establish a secure, reviewable path for managing NovaCart's Azure development infrastructure without depending on a developer's laptop.
+The Terraform configuration and GitHub Actions workflows remain in the public repository. The Azure remote-state backend was deliberately deleted on **2026-10-29** to stop ongoing charges. The post-deletion inventory returned no resource groups or resources in the selected subscription.
 
-## Current Workflow
+The OIDC backend workflow successfully authenticated to Azure, listed the Terraform-state blob, and initialized the AzureRM backend on **2026-10-27**, before the teardown. That historical test is valid evidence of the setup at that time; it does not mean the backend currently exists.
 
-Three workflows have distinct responsibilities:
+The old remote backend details were:
 
-- `.github/workflows/ci.yml` runs the main verification suite, including Terraform validation, backend tests, frontend checks, and container image builds.
-- `.github/workflows/terraform-azure-infra.yml` validates Terraform formatting and configuration on pull requests affecting the relevant infrastructure files. It initializes Terraform without configuring a backend and does not log in to Azure, create a plan, or apply changes.
-- `.github/workflows/terraform-azure-oidc-test.yml` is manually triggered and verifies GitHub Actions authentication to Azure, blob-container access, and Terraform remote-backend initialization.
-
-The OIDC backend test completed successfully on `main` on October 27, 2026. This verifies authentication and backend connectivity, not application infrastructure deployment.
-
-## Remote State
-
-The Azure remote-state bootstrap has been provisioned and verified.
-
-- Resource group: `rg-novacart-tfstate`
+- Resource Group: `rg-novacart-tfstate`
 - Region: `centralindia`
-- Storage account: `stnovacarttf1027`
-- Storage redundancy: Standard LRS
+- Storage Account: `stnovacarttf1027`
 - Blob container: `tfstate`
-- Terraform state key: `novacart-dev.tfstate`
+- State key: `novacart-dev.tfstate`
 
-Anonymous blob access and storage shared-key authorization are disabled. The container is accessed through Microsoft Entra authentication and Azure RBAC.
+The 181-byte state blob was downloaded to a private local backup before deletion. Keep that file out of Git. It showed no managed resources when the user last ran `terraform state list`; a separate older archived local state may describe prior resources and must not be restored blindly.
 
-The storage account has not been verified as network-private, and no private endpoint has been confirmed. Do not describe this storage configuration as private-network-only.
+## Workflow inventory
 
-GitHub Actions successfully initialized the AzureRM backend using OIDC. Successful initialization does not prove that a populated Terraform state snapshot already exists. The OIDC test does not run `terraform plan` or `terraform apply`.
+| Workflow | What it does | Current condition |
+|---|---|---|
+| `.github/workflows/ci.yml` | Pull-request tests, Terraform static checks, Compose validation, and container image builds | Does not require Azure resources for these validation steps |
+| `.github/workflows/terraform-azure-infra.yml` | On relevant PRs, runs Terraform fmt/init without backend/validate | Static validation only; does not log in to Azure or provision infrastructure |
+| `.github/workflows/terraform-azure-oidc-test.yml` | Manually logs in with OIDC, lists the state blob, initializes the remote backend | **Currently blocked:** the configured Storage Account/container were deleted |
+| `.github/workflows/terraform-azure-plan.yml` | Manually logs in and generates a reviewable plan; there is no `terraform apply` | **Currently blocked:** remote backend no longer exists; do not run until it is re-created |
+| `.github/workflows/azure-dev-deploy.yml` | Builds/pushes both images and updates existing DEV Container Apps by digest | **Currently blocked:** it expects a pre-existing DEV Resource Group, ACR, frontend and backend Container Apps, and deployment permissions. It does not create infrastructure. |
 
-Do not commit Terraform state files, backend credentials, or sensitive plan files to the repository.
+## Identity, environment and permissions
 
-## Authentication and Permissions
+GitHub Actions uses OIDC with the `azure-development` GitHub Environment and the Microsoft Entra app registration/federated credential. This avoids storing a long-lived Azure client secret in the repository.
 
-GitHub Actions authenticates to Azure using OpenID Connect (OIDC) and a Microsoft Entra federated identity credential rather than a long-lived client secret.
+The environment's branch restriction was configured for `main`. Required reviewers were not configured, so the environment was not an enforced human-approval gate.
 
-The GitHub Environment is named `azure-development`. Its federated subject is restricted to this repository and environment.
+Before teardown, the GitHub service principal had `Storage Blob Data Contributor` scoped to the `tfstate` blob container. That scope belonged to the deleted backend. Re-create and verify the appropriate scoped role assignment when a new state backend is bootstrapped. Do not grant subscription-wide `Owner` or `Contributor` just to make the plan work.
 
-The GitHub Actions service principal has the `Storage Blob Data Contributor` role scoped to the `tfstate` blob container. It has not been granted this state-access role at subscription scope.
+## How to resume safely
 
-The manually triggered workflow verified:
+Do not start with the existing plan workflow; it hard-codes the deleted backend's resource names. If/when Azure usage is approved:
 
-1. Azure login through OIDC.
-2. Azure identity and blob-container access.
-3. Terraform initialization using the Azure remote-state backend.
+1. Estimate the monthly and per-run cost. State storage has a small ongoing charge, and the app/registry/database can cost substantially more.
+2. Bootstrap the state Storage Account and container through a separately controlled process. Do not attempt to manage the first state account solely from a root module that already requires that backend.
+3. Configure OIDC, check the exact issuer/audience/subject, and grant the GitHub identity blob access at the state container. For infrastructure planning, evaluate a separate read-only Azure resource role; state access alone is not resource-read access.
+4. Update the backend arguments in both `terraform-azure-oidc-test.yml` and `terraform-azure-plan.yml` if the new resource names differ. Keep state keys separated by environment.
+5. Run the OIDC backend test first and verify Azure identity, blob access, backend initialization, and locking.
+6. Run the plan workflow only after required environment variables/secrets and read permissions are ready. Review every resource addition, replacement, deletion, role assignment, network change, and estimated cost.
+7. Do not add an apply workflow until a reviewed-plan workflow, restricted environment, appropriate permissions, an approval mechanism, and recovery procedures have been designed and tested.
 
-**Deployment protection still needs attention.** The latest environment screenshot showed `No restriction` for deployment branches and tags. Change this to `Selected branches and tags`, add a `Branch` rule named `main`, and verify that the saved rule is displayed before relying on this environment for future infrastructure workflows.
+## Secrets and variables
 
-Required reviewers have not been configured. The environment therefore does not currently enforce mandatory human approval.
+The Terraform plan workflow expects these GitHub Environment variables:
 
-## Plan, Review, and Apply
+- `AZURE_CLIENT_ID`
+- `AZURE_TENANT_ID`
+- `AZURE_SUBSCRIPTION_ID`
+- `NOVACART_ACR_NAME`
+- `NOVACART_POSTGRES_SERVER_NAME`
 
-The existing infrastructure validation workflow remains validation-only. It checks Terraform formatting and configuration but does not authenticate to Azure, generate a plan, or apply infrastructure.
+It also expects `NOVACART_DB_ADMIN_PASSWORD` as a protected environment secret for Terraform planning. Keep real values out of YAML, Git, terminal logs, issues, and PR comments. Do not paste the password into chat.
 
-The OIDC backend test verifies authentication and backend initialization only. It does not create or modify application infrastructure.
+## Current acceptance state
 
-The next step is to introduce a restricted Terraform plan workflow. Before running a plan, review:
+**Implemented and verified historically:** Azure OIDC login, state-container access, and Terraform backend initialization (2026-10-27); Terraform format/configuration validation in PR CI; manual plan-only workflow code.
 
-- Terraform resources, required variables, and provider configuration.
-- The selected remote state and whether a populated state snapshot exists.
-- Expected resource additions, changes, and deletions.
-- Azure permissions and estimated costs.
+**Not currently operational:** remote state/backend connectivity, live infrastructure planning against that backend, application deployment, live telemetry, and rollback. These need the relevant Azure resources re-created and the full process re-verified.
 
-The earlier local state was archived rather than migrated. Treat the new remote state as potentially empty; do not assume it represents the previous application infrastructure.
+## Cost and cleanup
 
-Any future apply workflow must use a reviewed plan, restrict the execution branch and environment, and provide appropriate approval controls. Do not apply infrastructure until the proposed changes, permissions, and costs have been reviewed and explicitly approved.
-
-## Visibility and Operational Boundaries
-
-GitHub Actions provides run history and logs for the validation and OIDC test workflows. A future infrastructure deployment workflow should preserve traceability between the source revision, reviewed plan, approval, and applied changes.
-
-Passing Terraform formatting and validation does not prove that Azure can create resources successfully. Live deployment, post-deployment verification, and tested recovery procedures remain future work.
-
-## Development and Production
-
-The intended development workflow should operate independently of a developer's machine and use centrally managed state and secure authentication.
-
-Production use would require additional controls, including separated environments and permissions, state recovery testing, monitoring and alerting, tested rollback procedures, and clear operational ownership.
-
-## Status and Next Steps
-
-**Implemented and verified**
-
-- Terraform formatting and configuration validation in GitHub Actions.
-- Azure Storage remote-state bootstrap.
-- GitHub Actions OIDC federation with Microsoft Entra.
-- Container-scoped Azure RBAC for Terraform state access.
-- Successful GitHub Actions verification of OIDC authentication, blob access, and Terraform backend initialization.
-
-**Still pending**
-
-- Restrict the `azure-development` environment to the `main` branch.
-- Upgrade outdated JavaScript actions and validate the runner-image migration.
-- Add a reviewed Terraform plan workflow.
-- Establish explicit approval controls before infrastructure changes.
-- Add a controlled apply workflow.
-- Perform live infrastructure deployment and post-deployment verification.
-- Test state recovery and document operational recovery procedures.
-
-No application infrastructure was deployed by the OIDC backend test. Continue to estimate costs and review the complete plan before any deployment.
-
-## Cost and Cleanup
-
-The remote-state storage account continues to incur storage and transaction charges. The OIDC test does not deploy application compute resources.
-
-When this setup is retired, review the GitHub federated credential, Entra app registration/service principal, container-scoped role assignment, GitHub workflows, and environment configuration. Delete the storage account and `rg-novacart-tfstate` only after safely preserving any Terraform state still required.
+Current Azure inventory showed no resources in the target subscription after cleanup. Cost Analysis may still show previously incurred charges because billing data can lag. If you rebuild, record resource names and owners, use tags, estimate costs first, and delete only resources explicitly approved for cleanup after preserving the required Terraform state and data.

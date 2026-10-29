@@ -1,5 +1,9 @@
 # Private database connectivity — DEVOPS-011
 
+## Current state — 2026-10-29
+
+The private networking configuration is present in Terraform, but the private PostgreSQL path was not live-verified. The NovaCart Azure lab resources, including the application runtime and database, were intentionally deleted on 2026-10-29 to control cost. This guide describes the intended implementation and the checks required during a future approved rebuild; it does not claim that a private database is currently running.
+
 ## Goal and traffic path
 
 Keep the existing app path unchanged:

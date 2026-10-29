@@ -21,7 +21,7 @@ A PostgreSQL custom-format dump was created and copied to the PC. Treat it as an
 
 - Recreate the private networking path only when cloud spend is approved; inspect all Terraform replacements before applying.
 - Verify PostgreSQL public access is disabled, private DNS resolves correctly, `/api/ready` succeeds, and a new order persists.
-- Establish protected remote Terraform state and OIDC authentication before CI manages shared infrastructure.
+- Recreate the protected remote Terraform state backend, then re-verify OIDC and scoped RBAC before CI manages shared infrastructure. The OIDC backend test passed historically, but the backend Storage Account/container were deleted on 2026-10-29.
 - Keep secrets out of source control and saved plan files out of Git.
 - Add and verify alerting/observability controls before any production claim.
 
