@@ -160,7 +160,6 @@ variable "app_environment" {
   default     = "development"
 }
 
-
 variable "backend_min_replicas" {
   description = "Minimum backend replicas per active revision. A value of 1 avoids scale-from-zero latency; costs more during a release while old and new revisions overlap."
   type        = number
