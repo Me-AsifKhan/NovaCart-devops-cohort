@@ -55,8 +55,8 @@ Stop the stack with `docker compose -f compose.yaml down`. The named PostgreSQL 
 | `.github/workflows/terraform-azure-infra.yml` | Terraform static validation on relevant pull requests |
 | `.github/workflows/terraform-azure-oidc-test.yml` | Manual OIDC and remote-state connectivity test; currently blocked by the deleted backend |
 | `.github/workflows/terraform-azure-plan.yml` | Manual Terraform plan-only workflow; currently blocked by the deleted backend |
-| `.github/workflows/azure-dev-deploy.yml` | Image publish/deploy workflow; requires existing Azure DEV resources |
-| `infra/azure/` | Current Terraform configuration, in one root module |
+| `.github/workflows/azure-dev-deploy.yml` | Manual OIDC-gated release with revision canary, smoke validation and rollback attempt; requires existing Azure DEV resources |
+| `docs/production-capacity-and-availability-review.md` | Capacity/availability risk review and validation checklist |\n| `docs/safe-production-deployment.md` | Manual canary, validation, promotion and rollback procedure |\n| `infra/azure/` | Current Terraform configuration, in one root module |
 | `docs/` | Architecture, deployment evidence, reproducibility, security, observability, and operating guides |
 | `tickets/` | Ticket definitions; see the ticket audit for missing/unverified items |
 | `ONBOARDING.md` | Cohort setup guidance |
