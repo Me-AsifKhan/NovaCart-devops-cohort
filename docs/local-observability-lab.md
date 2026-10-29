@@ -4,7 +4,7 @@ This lab runs Prometheus and Grafana beside the local NovaCart Compose stack. It
 
 ## What gets collected
 
-- FastAPI request counter and duration histogram at the internal `/metrics` endpoint.
+- FastAPI request counter and duration histogram at the internal `/metrics` endpoint, implemented with the official Prometheus Python client and a small route-template-aware middleware.
 - Prometheus scrape availability (`up`).
 - A provisioned Grafana dashboard with request rate, 5xx ratio, p95 request latency, and backend scrape availability.
 - Two Prometheus alert rules: backend target down, and sustained elevated 5xx ratio with a minimum request volume.
