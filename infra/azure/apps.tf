@@ -54,34 +54,34 @@ resource "azurerm_container_app" "backend" {
       memory = var.container_memory
 
       startup_probe {
-        transport                = "HTTP"
-        path                     = "/health"
-        port                     = 8080
-        initial_delay            = 5
-        interval_seconds         = 5
-        timeout                  = 3
-        failure_count_threshold  = 24
+        transport               = "HTTP"
+        path                    = "/health"
+        port                    = 8080
+        initial_delay           = 5
+        interval_seconds        = 5
+        timeout                 = 3
+        failure_count_threshold = 24
       }
 
       readiness_probe {
-        transport                 = "HTTP"
-        path                      = "/ready"
-        port                      = 8080
-        initial_delay             = 5
-        interval_seconds          = 10
-        timeout                   = 3
-        failure_count_threshold   = 3
-        success_count_threshold   = 1
+        transport               = "HTTP"
+        path                    = "/ready"
+        port                    = 8080
+        initial_delay           = 5
+        interval_seconds        = 10
+        timeout                 = 3
+        failure_count_threshold = 3
+        success_count_threshold = 1
       }
 
       liveness_probe {
-        transport                = "HTTP"
-        path                     = "/health"
-        port                     = 8080
-        initial_delay            = 10
-        interval_seconds         = 10
-        timeout                  = 3
-        failure_count_threshold  = 3
+        transport               = "HTTP"
+        path                    = "/health"
+        port                    = 8080
+        initial_delay           = 10
+        interval_seconds        = 10
+        timeout                 = 3
+        failure_count_threshold = 3
       }
 
       env {
@@ -114,7 +114,7 @@ resource "azurerm_container_app" "backend" {
     allow_insecure_connections = true
 
     traffic_weight {
-      percentage     = 100
+      percentage      = 100
       revision_suffix = "bootstrap"
     }
   }
@@ -171,34 +171,34 @@ resource "azurerm_container_app" "frontend" {
       memory = var.container_memory
 
       startup_probe {
-        transport                = "HTTP"
-        path                     = "/"
-        port                     = 80
-        initial_delay            = 2
-        interval_seconds         = 5
-        timeout                  = 3
-        failure_count_threshold  = 12
+        transport               = "HTTP"
+        path                    = "/"
+        port                    = 80
+        initial_delay           = 2
+        interval_seconds        = 5
+        timeout                 = 3
+        failure_count_threshold = 12
       }
 
       readiness_probe {
-        transport                 = "HTTP"
-        path                      = "/"
-        port                      = 80
-        initial_delay             = 2
-        interval_seconds          = 10
-        timeout                   = 3
-        failure_count_threshold   = 3
-        success_count_threshold   = 1
+        transport               = "HTTP"
+        path                    = "/"
+        port                    = 80
+        initial_delay           = 2
+        interval_seconds        = 10
+        timeout                 = 3
+        failure_count_threshold = 3
+        success_count_threshold = 1
       }
 
       liveness_probe {
-        transport                = "HTTP"
-        path                     = "/"
-        port                     = 80
-        initial_delay            = 10
-        interval_seconds         = 10
-        timeout                  = 3
-        failure_count_threshold  = 3
+        transport               = "HTTP"
+        path                    = "/"
+        port                    = 80
+        initial_delay           = 10
+        interval_seconds        = 10
+        timeout                 = 3
+        failure_count_threshold = 3
       }
 
       env {
@@ -219,7 +219,7 @@ resource "azurerm_container_app" "frontend" {
     allow_insecure_connections = true
 
     traffic_weight {
-      percentage     = 100
+      percentage      = 100
       revision_suffix = "bootstrap"
     }
   }
