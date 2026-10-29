@@ -22,7 +22,7 @@ This audit separates three states: code/documentation in Git, historical evidenc
 | **017 — release safety** | `docs/alerting-and-release-safety.md` documents thresholds, alert-noise controls, traceability, rollback decisions, and post-release evidence. | **Operating guide delivered; controls not live-proven.** No active alert rules or tested Azure Container Apps rollback are available while the environment is deleted. |
 | **018 — engineering readiness** | The review is drafted in PR #31 as `ENGINEERING-READINESS-REVIEW.md`. | **Review drafted; merge/checks pending.** The evidence-based decision is NO-GO for a pilot while Azure is empty and security/monitoring/rollback gates remain unverified. |
 | **019 — capacity and safe releases** | The supplied ticket definition, capacity review, safe deployment guide, Terraform scaling/probes/connection pooling, and health-gated revision workflow are in PR #32. Releases are manual-only, require explicit `RELEASE`, use a weighted backend canary and a labeled frontend candidate. | **Implementation in PR #32; latest CI must pass and live acceptance remains pending.** The code introduces bounded scaling and rollback-aware releases. Azure is deleted, so no live capacity, canary or rollback drill has run. |
-| **020 — production rollback** | The ticket definition is included as `tickets/DEVOPS-020.md` with this update. `docs/production-rollback-runbook.md` was not found before this update. | **Definition added; implementation remains pending.** Write the runbook to match the current image-digest workflow. A live rollback drill cannot be honestly claimed until the runtime is rebuilt and the drill is executed. |
+| **020 — production rollback** | Ticket definition is in `tickets/DEVOPS-020.md`; the runbook is drafted in PR #33, which depends on the DEVOPS-019 release implementation in PR #32. | **Runbook in review; live rollback remains pending.** Keep PR #33 unmerged until PR #32 is accepted, then verify its commands and conduct a live rollback only after Azure is deliberately rebuilt. |
 
 ## Terraform structure compared with the mentor's recommendation
 
@@ -42,12 +42,12 @@ The current flat root module is valid Terraform and was the design used for the 
 
 ## Recommended next sequence
 
-1. **Reconcile documentation and ticket definitions** — merge the updated audit with PR #32, using the supplied DEVOPS-019 acceptance criteria as the source of truth.
+1. **Reconcile docs and the ticket sequence** — finish PR #30 (DEVOPS-016), then PR #31 (DEVOPS-018), then PR #32 (DEVOPS-019), and merge PR #33 (DEVOPS-020) only after its dependency is merged.
 2. **Restore local confidence with no Azure spend** — run the existing local Compose checks, backend tests, Terraform formatting, `terraform init -backend=false`, and `terraform validate`. This does not require Azure.
 3. **Choose the Terraform structure before rebuilding Azure** — decide whether to adopt the module/environment layout now, before creating resources again. Keep the Dev and production state boundaries separate.
 4. **Rebuild remote state only when approved** — bootstrap the Storage Account/container first, then update the backend configuration, verify OIDC/RBAC, and run a plan. State storage is a billable resource even when the app is stopped.
 5. **Prioritize security and runtime evidence** — least-privilege app database user/secrets, private PostgreSQL, live deployment, centralized logs, real metrics, and a tested actionable alert.
-6. **Finish DEVOPS-018 and DEVOPS-020** — create the readiness review and rollback runbook; perform a real rollback drill only after an environment is deliberately restored.
+6. **Finish DEVOPS-018 and DEVOPS-020** — PR #31 provides the readiness review; PR #33 provides the rollback runbook. Merge them in sequence and perform a real rollback drill only after an environment is deliberately restored.
 7. **Use budget controls** — do not run `terraform apply` or enable the deployment workflow until the plan, replacement/deletion actions, role assignments, and cost estimate have been reviewed.
 
 ## What not to claim
@@ -56,4 +56,4 @@ The current flat root module is valid Terraform and was the design used for the 
 - Do not describe DEVOPS-011's private route as live-verified.
 - Do not say a dashboard/alert exists because its design is in Markdown.
 - Do not say the plan-only workflow deploys infrastructure.
-- Do not fabricate DEVOPS-019 requirements.
+- Do not claim the DEVOPS-019 canary, capacity behavior, or rollback has been live-tested while Azure is deleted.
