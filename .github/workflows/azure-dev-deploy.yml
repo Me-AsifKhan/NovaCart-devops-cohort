@@ -16,19 +16,19 @@ on:
         description: "Candidate backend share while validating the new revision"
         type: choice
         options:
-          - "5"
           - "10"
           - "20"
-        default: "10"
+          - "30"
+        default: "20"
         required: true
       backend_canary_observation_seconds:
         description: "Seconds to observe the backend canary before full cutover"
         type: choice
         options:
-          - "30"
           - "60"
           - "120"
-        default: "60"
+          - "300"
+        default: "120"
         required: true
 
 permissions:
@@ -84,12 +84,12 @@ jobs:
             exit 1
           fi
           case "$BACKEND_CANARY_PERCENT" in
-            5|10|20) ;;
-            *) echo "::error::Backend canary percentage must be 5, 10, or 20."; exit 1 ;;
+            10|20|30) ;;
+            *) echo "::error::Backend canary percentage must be 10, 20, or 30."; exit 1 ;;
           esac
           case "$BACKEND_CANARY_OBSERVATION_SECONDS" in
-            30|60|120) ;;
-            *) echo "::error::Backend observation window must be 30, 60, or 120 seconds."; exit 1 ;;
+            60|120|300) ;;
+            *) echo "::error::Backend observation window must be 60, 120, or 300 seconds."; exit 1 ;;
           esac
 
           if [[ ! "$ACR_NAME" =~ ^[A-Za-z0-9]{5,50}$ ]]; then
@@ -213,6 +213,7 @@ jobs:
           CANDIDATE_FRONTEND_URL="https://${FRONTEND_APP_NAME}---candidate.${ACA_DEFAULT_DOMAIN}"
           TRAFFIC_SHIFTED=false
           PROMOTION_COMPLETE=false
+          BACKEND_CANDIDATE_HITS=0
 
           rollback_on_error() {
             local exit_code="$1"
@@ -326,9 +327,17 @@ jobs:
             echo "Smoke-testing ${url}"
             curl --fail --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors --max-time 15 "${url}/" -o /dev/null
 
-            local health ready products
-            health="$(curl --fail --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors --max-time 15 "${url}/api/health")"
+            local health ready products health_headers served_revision
+            health_headers="$(mktemp)"
+            health="$(curl --fail --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors --max-time 15 --dump-header "$health_headers" "${url}/api/health")"
             jq -e '.status == "ok"' <<< "$health" > /dev/null
+
+            served_revision="$(awk -F': *' 'tolower($1) == "x-novacart-revision:" { gsub("\\r", "", $2); value = $2 } END { print value }' "$health_headers")"
+            rm -f "$health_headers"
+            if [[ "$served_revision" == "${NEW_BACKEND_REVISION}" ]]; then
+              BACKEND_CANDIDATE_HITS=$((BACKEND_CANDIDATE_HITS + 1))
+            fi
+            echo "Backend revision serving /api/health: ${served_revision:-missing revision header}"
 
             ready="$(curl --fail --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors --max-time 15 "${url}/api/ready")"
             jq -e '.status == "ready"' <<< "$ready" > /dev/null
@@ -378,7 +387,16 @@ jobs:
             sleep 10
           done
 
-          # Full cutover only after the repeated canary smoke tests pass.
+          require_observed_candidate() {
+            if (( BACKEND_CANDIDATE_HITS < 1 )); then
+              echo "::error::No smoke-test response was proven to come from candidate backend revision ${NEW_BACKEND_REVISION}. Keep the old traffic target and rerun with a higher canary share or longer observation window."
+              return 1
+            fi
+            echo "- **Verified backend canary responses:** ${BACKEND_CANDIDATE_HITS} response(s) carried X-NovaCart-Revision=${NEW_BACKEND_REVISION}." >> "$GITHUB_STEP_SUMMARY"
+          }
+          require_observed_candidate
+
+          # Full cutover only after the repeated canary smoke tests pass and the candidate revision is directly observed.
           az containerapp ingress traffic set \
             --name "$BACKEND_APP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
