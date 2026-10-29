@@ -145,6 +145,39 @@ variable "container_memory" {
   default     = "1Gi"
 }
 
+variable "container_min_replicas" {
+  description = "Minimum replicas kept ready for the development service. A non-zero minimum trades idle cost for lower cold-start risk."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.container_min_replicas >= 1 && var.container_min_replicas <= 5
+    error_message = "container_min_replicas must be between 1 and 5."
+  }
+}
+
+variable "container_max_replicas" {
+  description = "Hard upper bound on replicas per app. Keep conservative until load tests and database connection limits are measured."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.container_max_replicas >= var.container_min_replicas && var.container_max_replicas <= 5
+    error_message = "container_max_replicas must be >= container_min_replicas and <= 5 until capacity testing justifies a higher cap."
+  }
+}
+
+variable "http_concurrent_requests" {
+  description = "Initial HTTP concurrency target for Container Apps scale-out. This is a hypothesis to tune with load testing, not a measured capacity limit."
+  type        = number
+  default     = 50
+
+  validation {
+    condition     = var.http_concurrent_requests >= 10 && var.http_concurrent_requests <= 200
+    error_message = "http_concurrent_requests must be between 10 and 200."
+  }
+}
+
 variable "app_environment" {
   description = "Application environment name."
   type        = string
