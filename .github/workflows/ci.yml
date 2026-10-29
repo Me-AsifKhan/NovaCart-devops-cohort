@@ -34,6 +34,8 @@ jobs:
         run: terraform -chdir=infra/azure validate
 
       - name: Validate Docker Compose configuration
+        env:
+          GRAFANA_ADMIN_PASSWORD: ci-only-not-for-reuse
         run: docker compose -f novacart/compose.yaml config --quiet
       - name: Verify frontend structural assets
         run: |
