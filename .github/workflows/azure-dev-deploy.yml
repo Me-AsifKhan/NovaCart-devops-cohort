@@ -115,6 +115,28 @@ jobs:
           backend_image="${ACR_LOGIN_SERVER}/novacart-backend@${BACKEND_DIGEST}"
           frontend_image="${ACR_LOGIN_SERVER}/novacart-frontend@${FRONTEND_DIGEST}"
 
+          # Capture the previous artifacts before any update. These values are the
+          # rollback target if deployment or post-deployment smoke checks fail.
+          previous_backend_image="$(az containerapp show --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[?name=='novacart-backend'].image | [0]" --output tsv)"
+          previous_frontend_image="$(az containerapp show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[?name=='novacart-frontend'].image | [0]" --output tsv)"
+          : "${previous_backend_image:?Could not identify previous backend image}"
+          : "${previous_frontend_image:?Could not identify previous frontend image}"
+
+          rollback_on_failure() {
+            status=$?
+            if [[ "$status" -ne 0 ]]; then
+              trap - ERR
+              echo "::error::Deployment or smoke validation failed; attempting to restore previous image references."
+              echo "Previous backend image: $previous_backend_image"
+              echo "Previous frontend image: $previous_frontend_image"
+              az containerapp update --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --image "$previous_backend_image" --output none || echo "::error::Backend rollback command failed."
+              az containerapp update --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --image "$previous_frontend_image" --output none || echo "::error::Frontend rollback command failed."
+              echo "Rollback was attempted. Verify both apps and run the documented smoke checks before considering recovery complete."
+            fi
+            exit "$status"
+          }
+          trap rollback_on_failure ERR
+
           # Deploy the backend first so the frontend targets the intended API version.
           az containerapp update \
             --name "$BACKEND_APP_NAME" \
@@ -146,6 +168,27 @@ jobs:
 
           backend_revision="$(az containerapp revision list --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "[?properties.active == `true`].name | [0]" --output tsv)"
           frontend_revision="$(az containerapp revision list --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "[?properties.active == `true`].name | [0]" --output tsv)"
+
+          # Resolve the public frontend URL and validate user-visible paths after
+          # both image updates. Any failed check triggers the rollback trap above.
+          frontend_fqdn="$(az containerapp show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.configuration.ingress.fqdn" --output tsv)"
+          : "${frontend_fqdn:?Could not resolve frontend ingress FQDN}"
+
+          for path in / /api/health /api/ready /api/products; do
+            success=false
+            for attempt in $(seq 1 12); do
+              if curl --fail --silent --show-error --max-time 10 "https://${frontend_fqdn}${path}" --output /tmp/novacart-smoke-response.json; then
+                echo "Smoke check passed: ${path}"
+                success=true
+                break
+              fi
+              sleep 5
+            done
+            if [[ "$success" != "true" ]]; then
+              echo "::error::Smoke check failed for ${path}; rollback will be attempted."
+              exit 1
+            fi
+          done
 
           echo "backend_image=$backend_image" >> "$GITHUB_OUTPUT"
           echo "frontend_image=$frontend_image" >> "$GITHUB_OUTPUT"
