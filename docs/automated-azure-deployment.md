@@ -1,101 +1,89 @@
-# Automated Azure DEV Deployment
+# Automated Azure DEV Deployment — DEVOPS-014 / DEVOPS-019
 
-## Purpose
+## Current status
 
-DEVOPS-014 builds and publishes the NovaCart frontend and backend containers after application changes merge to `main`, then updates the Azure development Container Apps to run the exact image digests produced by that run.
+The Azure lab resources, including the Terraform state backend, were deliberately deleted on 2026-10-29 to control cost. The workflow and Terraform configuration remain in GitHub, but a live Azure deployment is not currently available. The workflow's Azure preflight will fail until the resource group, ACR, Container Apps, state/backend plan prerequisites, and required permissions are intentionally restored.
 
-The workflow is `.github/workflows/azure-dev-deploy.yml`. It complements, rather than replaces, the CI verification suite and Terraform infrastructure workflows.
+A public Azure DEV deployment was verified historically on 2026-10-26. Its URL and test results are historical, not a live demo. See [the deployment record](azure-dev-deployment.md).
 
-## Delivery flow
+## Scope
 
-1. An application change merges into `main`. GitHub branch protection is expected to require the existing `NovaCart Verification Suite` before the merge.
-2. GitHub Actions checks out the merged commit and authenticates to Azure with the `azure-development` environment's OIDC identity. No client secret is placed in YAML.
-3. The workflow checks that the development resource group, ACR, and both Container Apps already exist. It fails early if these prerequisites or the identity's permissions are missing.
-4. Docker Buildx builds the backend from `novacart/backend` and the frontend from `novacart/frontend`.
-5. Both images are pushed to ACR with the source commit SHA as a traceable tag. The workflow captures each registry digest.
-6. The backend and then the frontend are updated to use digest references (`image@sha256:...`), not a mutable `latest` tag.
-7. The workflow verifies that Azure reports the requested image references and writes the source commit, image digests, active revisions, and run link to the GitHub Actions summary.
+The workflow is `.github/workflows/azure-dev-deploy.yml`. It is **manual-only**, uses GitHub OIDC, and targets the `azure-development` environment. It does not provision infrastructure and should not be used as a production workflow without a separate production environment, reviewer controls, and production-specific validation.
 
-The workflow also supports `workflow_dispatch` for a controlled manual rerun from `main`. It does not run Terraform and does not create Azure infrastructure.
+## Controlled release flow
 
-## Existing infrastructure expected
+1. An application change merges into `main` after the required PR CI checks pass.
+2. An operator manually starts **NovaCart Safe Azure DEV Release** from branch `main`, selects `RELEASE`, and chooses the canary percentage and observation window.
+3. GitHub Actions authenticates to Azure using the `azure-development` OIDC identity. No long-lived Azure client secret is stored in the workflow.
+4. Preflight verifies the resource group, registry, both Container Apps, and Multiple revision mode. It stops before image changes if prerequisites are absent.
+5. The workflow records the highest-weight known-good revision and its immutable image, then pins 100% traffic to explicit revision names. This prevents a later update from implicitly shifting all traffic to the newest revision.
+6. Docker builds and pushes frontend/backend images tagged with the source commit SHA. The workflow captures registry digests and deploys by digest.
+7. The backend candidate is created, and the workflow waits for a healthy/provisioned/running revision. It then sends a small configured traffic share to the candidate and validates the critical path through the existing frontend.
+8. If the backend passes health/readiness/product checks and a short observation window, it receives 100% of backend traffic. A failure aborts the rollout and attempts to restore the previous backend/frontend revision pair.
+9. The frontend candidate follows the same platform-health, canary, smoke-check and observation sequence. Only after validation does it receive 100% of frontend traffic.
+10. The workflow deactivates previous revisions after successful promotion to avoid idle replica cost, runs final smoke checks, and writes commit, image digests, previous/candidate revisions, traffic share, observation duration and outcome to the GitHub Actions summary.
 
-The resource names follow the defaults in `infra/azure`:
+This is a small-team canary strategy. It gives the team a recoverable version boundary without requiring a large deployment platform. It does not yet include a metric-based SLO gate or an external alert notification route. See [the safe deployment guide](safe-production-deployment.md).
+
+## Infrastructure expected
 
 | Resource | Expected name |
 |---|---|
 | Resource group | `rg-novacart-dev` |
-| Azure Container Registry | The value of `NOVACART_ACR_NAME` |
+| Azure Container Registry | GitHub Environment variable `NOVACART_ACR_NAME` |
 | Backend Container App | `ca-novacart-dev-backend` |
 | Frontend Container App | `ca-novacart-dev-frontend` |
+| Revision mode | `Multiple` |
+| Backend liveness/startup | `/health` |
+| Backend readiness | `/ready` |
+| Frontend probes | `/` |
 
-Terraform currently declares the application Container Apps behind `deploy_application`, whose default is `false`. The infrastructure must therefore be provisioned with the application resources enabled before this deployment workflow can succeed. DEVOPS-013 owns infrastructure provisioning; DEVOPS-014 should not create infrastructure as a side effect of deploying images. The Terraform app resources also ignore subsequent changes to the image field, so a later infrastructure apply does not replace the digest deployed by CI with the bootstrap image tag. Terraform remains responsible for the app configuration; this workflow owns subsequent image rollouts.
+Terraform keeps the first image and traffic configuration as bootstrap defaults. After bootstrap, the Terraform lifecycle rules ignore image and traffic-weight changes, because the release workflow owns those fields. Terraform continues to own resource/platform configuration. The application resources are still gated by `deploy_application`, whose default is `false`.
 
-## GitHub environment configuration
+## GitHub Environment configuration
 
-The `azure-development` environment must contain these **variables**:
+The `azure-development` Environment requires these **variables**:
 
 - `AZURE_CLIENT_ID`
 - `AZURE_TENANT_ID`
 - `AZURE_SUBSCRIPTION_ID`
 - `NOVACART_ACR_NAME`
 
-The corresponding Entra federated credential must trust this repository's `azure-development` GitHub Environment subject. Keep deployment restricted to `main`; the workflow also checks the branch before it proceeds.
+The Microsoft Entra federated credential subject must match this repository's `azure-development` GitHub Environment identity exactly. Restrict deployment to `main`. The current workflow verifies that branch and also requires explicit `RELEASE` input.
 
-No database administrator password is needed by this workflow. Database credentials belong to the runtime configuration and must not be printed, committed, or passed into the image build.
+No database password is needed to build or push these images. Database credentials must never be baked into an image, passed as a Docker build argument, or printed in a workflow log.
 
 ## Azure permissions
 
-The currently verified OIDC service principal has `Storage Blob Data Contributor` at the Terraform state container. That role alone is **not enough** to publish images or update Container Apps.
+The old OIDC service principal had `Storage Blob Data Contributor` scoped to the deleted Terraform state container. That scope is gone with the backend and does not provide usable access now.
 
-After the relevant resources exist, grant only the additional permissions required by the deployment identity:
-- ACR push permission scoped to the NovaCart registry.
-- Container Apps update/read permission for the NovaCart development apps, scoped to the development resource group.
+After resources are intentionally recreated, grant the deployment identity only the permissions needed to:
+- push images to ACR (for example, `AcrPush` scoped to that registry);
+- read and update the two Container Apps and inspect their revisions;
+- read the resource group/registry metadata required for preflight.
 
-For a straightforward development setup, the built-in `Contributor` role can be scoped to **only** `rg-novacart-dev`, plus `AcrPush` scoped to the registry. This is still broader than ideal at resource-group level because the registry shares the group. Do not grant subscription-wide `Contributor` or `Owner`; use a custom role or separate registry/workload scopes if tighter least privilege is required. Role assignments must be made by an authorized Azure administrator after those scopes exist.
+Do not grant subscription-wide `Owner` or `Contributor` as a shortcut. For a production setup, separate build/publish and deploy identities or scopes where practical, and require review through a protected production Environment.
 
-## Failure visibility and verification
+## Failure handling and validation
 
-A failed preflight indicates that the expected infrastructure cannot be found or read. A failed push generally indicates ACR authentication or permission trouble. A failed update or digest verification indicates a deployment or Azure permission problem.
+The workflow fails early if an app is not in Multiple revision mode. After image update, it waits for the new revision to report successful provisioning, running state and healthy state before sending canary traffic. It then validates:
 
-Check the GitHub Actions run log and the final job summary. For independent verification, inspect the app image and active revision in Azure:
+- frontend returns HTML;
+- `/api/health` returns `status=ok`;
+- `/api/ready` returns `status=ready`;
+- `/api/products` returns a non-empty product list;
+- repeated health/readiness checks pass during the selected observation window.
 
-```bash
-az containerapp show \
-  --name ca-novacart-dev-backend \
-  --resource-group rg-novacart-dev \
-  --query "properties.template.containers[].image" \
-  --output tsv
+If validation fails after the previous revisions have been captured, the rollback step attempts to activate both previous revisions, wait for them to become healthy, set each to 100% traffic, and rerun the critical API checks. If the rollback step also fails, treat it as an incident and inspect revision traffic manually.
 
-az containerapp show \
-  --name ca-novacart-dev-frontend \
-  --resource-group rg-novacart-dev \
-  --query "properties.template.containers[].image" \
-  --output tsv
+These are smoke checks, not full load tests or SLO monitoring. The workflow does not currently gate on an Azure dashboard's error ratio/p95 latency and does not notify an external on-call system.
 
-az containerapp revision list \
-  --name ca-novacart-dev-backend \
-  --resource-group rg-novacart-dev \
-  --query "[?properties.active == `true`].name" \
-  --output tsv
-```
+## Current acceptance boundary
 
-The deployed image should contain the expected digest and correspond to the commit linked from the workflow run. The successful update check verifies the configured image reference; it does not by itself prove application-level health. Use the application's existing health/readiness endpoints and later observability work for runtime-health confirmation.
+**Implemented in source control by this change:** manual release gate, OIDC login, preflight checks, digest-based images, multiple-revision canary flow, post-deploy health checks, automatic attempted rollback, and release evidence.
 
-## Safety and operational boundaries
+**Not live-verified:** this requires the deleted Azure DEV resources to be intentionally recreated, the deployment identity's scoped roles to be configured, the reviewed Terraform plan to be applied, and an actual deployment/rollback drill to succeed. Passing CI alone is not evidence of live deployment.
 
-- Delivery is limited to pushes to `main` affecting the frontend, backend, or this workflow; manual runs must use `main`.
-- The workflow has read-only GitHub repository permissions and OIDC login; it does not use a stored Azure client secret.
-- Image tags contain the source commit SHA, and deployments use image digests.
-- The workflow does not run Terraform, create/delete Azure infrastructure, modify database schema, or implement automatic rollback.
-- The backend is updated before the frontend. If one service updates and the second fails, inspect the run and both app revisions before retrying or manually restoring the prior image digest.
+## Cost and cleanup
 
-## Current status and remaining prerequisites
-
-**Implemented in this ticket's workflow/documentation:** push-to-main trigger, OIDC authentication, early resource checks, frontend/backend image build and publish, digest-based rollout, post-update image verification, and a run summary.
-
-**Not yet verified as a live delivery:** this depends on DEVOPS-013 provisioning the Azure development resources and on the deployment identity receiving the necessary ACR and Container Apps permissions. The earlier OIDC backend check and Terraform plan workflow do not demonstrate that these application resources exist or are deployed. Do not mark end-to-end delivery complete until an actual GitHub Actions run successfully publishes both images and verifies both deployed digests.
-
-## Cost notes
-
-A GitHub Actions run consumes runner/build minutes and pushes image layers into ACR. Existing ACR storage can incur registry charges. Updating Container Apps does not create the first-time infrastructure, but running application replicas and the PostgreSQL server can incur ongoing Azure charges. Review Azure Cost Management before enabling the application resources, and delete paid development resources only when they are no longer required and after any needed data/state has been preserved.
+GitHub Actions consumes runner/build minutes, ACR stores image layers, and running Container Apps replicas plus PostgreSQL/Log Analytics may incur Azure charges. The min-replica value of one is a deliberate warm-service/cost trade-off, not HA. Review current prices before rebuilding, preserve required database data and Terraform state, and remove only explicitly approved temporary resources after testing.
