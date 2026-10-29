@@ -6,7 +6,7 @@ resource "azurerm_container_app" "backend" {
   name                         = "ca-${var.name_prefix}-backend"
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
-  revision_mode                = "Single"
+  revision_mode                = "Multiple"
   workload_profile_name        = "Consumption"
   tags                         = var.tags
 
@@ -81,7 +81,7 @@ resource "azurerm_container_app" "frontend" {
   name                         = "ca-${var.name_prefix}-frontend"
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
-  revision_mode                = "Single"
+  revision_mode                = "Multiple"
   workload_profile_name        = "Consumption"
   tags                         = var.tags
 
