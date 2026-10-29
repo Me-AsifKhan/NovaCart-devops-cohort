@@ -14,7 +14,7 @@ The workflow is `.github/workflows/azure-dev-deploy.yml`. It complements, rather
 4. Docker Buildx builds the backend from `novacart/backend` and the frontend from `novacart/frontend`.
 5. Both images are pushed to ACR with the source commit SHA as a traceable tag. The workflow captures each registry digest.
 6. The backend and then the frontend are updated to use digest references (`image@sha256:...`), not a mutable `latest` tag.
-7. The workflow verifies that Azure reports the requested image references and writes the source commit, image digests, active revisions, and run link to the GitHub Actions summary.
+7. The workflow verifies that Azure reports the requested image references, checks the frontend plus /api/health, /api/ready, and /api/products through the public frontend, and writes the source commit, image digests, active revisions, and run link to the GitHub Actions summary. If an update or smoke check fails, it attempts to restore the image references captured before deployment. This is a best-effort rollback guard, not a proven recovery guarantee; inspect the final app images/revisions and repeat smoke checks.
 
 The workflow also supports `workflow_dispatch` for a controlled manual rerun from `main`. It does not run Terraform and does not create Azure infrastructure.
 
