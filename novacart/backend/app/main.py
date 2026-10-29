@@ -48,6 +48,7 @@ async def collect_request_metrics(request: Request, call_next):
     try:
         response = await call_next(request)
         status_code = response.status_code
+        response.headers["X-NovaCart-Revision"] = APP_RELEASE_REVISION
         return response
     finally:
         route = request.scope.get("route")
@@ -67,6 +68,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./novacart.db")
 APP_ENV = os.getenv("APP_ENV", "development")
 API_VERSION = os.getenv("API_VERSION", "v1")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+APP_RELEASE_REVISION = os.getenv("CONTAINER_APP_REVISION", "local")
 
 DATABASE_POOL_MAX_SIZE = int(os.getenv("DATABASE_POOL_MAX_SIZE", "4"))
 
