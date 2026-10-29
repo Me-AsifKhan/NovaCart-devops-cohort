@@ -2,17 +2,17 @@
 
 ## Purpose
 
-DEVOPS-014 builds and publishes the NovaCart frontend and backend containers after application changes merge to `main`, then updates the Azure development Container Apps to run the exact image digests produced by that run.
+DEVOPS-014 defines the NovaCart Azure DEV delivery workflow. The DEVOPS-019 update makes the release **manual-only**: merging an application change to `main` does not deploy to Azure. An operator must start the workflow on `main`, select `RELEASE`, and choose the backend canary share/observation window.
 
 The workflow is `.github/workflows/azure-dev-deploy.yml`. It complements, rather than replaces, the CI verification suite and Terraform infrastructure workflows.
 
 ## Delivery flow
 
-1. An application change merges into `main`. GitHub branch protection is expected to require the `NovaCart Verification Suite` before the merge.
+1. An application change merges into `main` after the required `NovaCart Verification Suite` checks pass. The merge itself never starts Azure deployment.
 2. GitHub Actions checks out the merged commit and authenticates to Azure with the `azure-development` environment's OIDC identity. No Azure client secret is stored in YAML.
 3. Preflight confirms the Resource Group, ACR, both Container Apps, **Multiple** revision mode, the current 100%-traffic revisions and their image references. It smoke-tests the current release before creating candidates. If these assumptions are not met, the workflow fails without changing traffic.
 4. Docker Buildx builds the backend and frontend, tags each image with the source commit SHA, and records the immutable registry digests.
-5. A uniquely suffixed backend candidate is created while the old frontend remains stable. The workflow waits for its startup/readiness/liveness health to be good, routes backend traffic to it, and smoke-tests the API through the existing frontend.
+5. A uniquely suffixed backend candidate is created while the old frontend remains stable. After its startup/readiness/liveness health is good, the workflow routes the selected 5/10/20% backend canary to the candidate while the previous revision retains the remainder. It repeats frontend/API/DB-readiness/products smoke tests during the selected 30/60/120-second window, then routes 100% to the candidate only if every check passes.
 6. A uniquely suffixed frontend candidate is created with no production frontend traffic. The workflow assigns the `candidate` revision label and tests its dedicated label URL for the homepage, API health, database readiness and products.
 7. Only after candidate tests pass does the workflow switch the main frontend ingress to the candidate. It repeats the smoke tests on the production URL.
 8. On a failure after traffic starts to move, the workflow attempts to restore both recorded previous revisions. It fails the run even if rollback succeeds and writes a summary showing old/candidate revisions, image digests, smoke test outcome and rollback result.
@@ -42,13 +42,13 @@ The `azure-development` environment must contain these **variables**:
 - `AZURE_SUBSCRIPTION_ID`
 - `NOVACART_ACR_NAME`
 
-The corresponding Entra federated credential must trust this repository's `azure-development` GitHub Environment subject. Keep deployment restricted to `main`; the workflow also checks the branch before it proceeds.
+The corresponding Entra federated credential must trust this repository's `azure-development` GitHub Environment subject. Keep the GitHub Environment restricted to `main`; the workflow independently checks the branch and requires explicit release confirmation.
 
 No database administrator password is needed by this workflow. Database credentials belong to the runtime configuration and must not be printed, committed, or passed into the image build.
 
 ## Azure permissions
 
-The currently verified OIDC service principal has `Storage Blob Data Contributor` at the Terraform state container. That role alone is **not enough** to publish images or update Container Apps.
+Before the 2026-10-29 teardown, the OIDC service principal had `Storage Blob Data Contributor` at the Terraform state container. That resource scope was deleted with the backend, so it does not provide usable state access now. It was never enough to publish images or update Container Apps.
 
 After the relevant resources exist, grant only the additional permissions required by the deployment identity:
 - ACR push permission scoped to the NovaCart registry.
@@ -86,7 +86,7 @@ The deployed image should contain the expected digest and correspond to the comm
 
 ## Safety and operational boundaries
 
-- Delivery is limited to pushes to `main` affecting the frontend, backend, or this workflow; manual runs must use `main`.
+- Deployment is triggered only by `workflow_dispatch`. The workflow accepts runs from `main` only and requires the operator to select `RELEASE`; a push or PR merge alone cannot deploy.
 - The workflow has read-only GitHub repository permissions and OIDC login; it does not use a stored Azure client secret.
 - Image tags contain the source commit SHA, deployments use immutable digests, and each revision receives a unique suffix.
 - The workflow does not run Terraform or create/delete Azure infrastructure.
