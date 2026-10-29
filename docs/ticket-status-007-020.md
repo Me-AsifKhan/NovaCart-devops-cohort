@@ -42,7 +42,7 @@ The current flat root module is valid Terraform and was the design used for the 
 
 ## Recommended next sequence
 
-1. **Reconcile documentation and ticket definitions** — merge this audit update; obtain the original DEVOPS-019 definition from the mentor.
+1. **Reconcile documentation and ticket definitions** — merge the updated audit with PR #32, using the supplied DEVOPS-019 acceptance criteria as the source of truth.
 2. **Restore local confidence with no Azure spend** — run the existing local Compose checks, backend tests, Terraform formatting, `terraform init -backend=false`, and `terraform validate`. This does not require Azure.
 3. **Choose the Terraform structure before rebuilding Azure** — decide whether to adopt the module/environment layout now, before creating resources again. Keep the Dev and production state boundaries separate.
 4. **Rebuild remote state only when approved** — bootstrap the Storage Account/container first, then update the backend configuration, verify OIDC/RBAC, and run a plan. State storage is a billable resource even when the app is stopped.
