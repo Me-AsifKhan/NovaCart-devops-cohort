@@ -10,7 +10,7 @@ The Terraform configuration, deployment workflow, OIDC workflow, application sou
 
 - The Terraform remote-state resource group and Storage Account were deleted on 2026-10-29. The last remote state was backed up locally before deletion. Keep that backup private; never commit it.
 - The OIDC backend-test and Terraform plan workflows depend on that backend and will not currently complete. Recreate and verify the backend before using them again.
-- The Azure deployment workflow expects an existing development resource group, registry, and Container Apps. It does not provision those resources, so it cannot deploy until the environment is deliberately rebuilt.
+- The Azure deployment workflow is manual-only, requires the operator to select `RELEASE` on `main`, and now validates a backend canary before full cutover. It expects existing resources and does not provision them, so it cannot deploy until the environment is deliberately rebuilt.
 - The private PostgreSQL networking design is present in Terraform, but it was not live-verified after enabling private mode.
 
 This is a cost-controlled learning repository, not a claim that a live Azure environment is currently running.
