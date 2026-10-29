@@ -173,9 +173,9 @@ variable "backend_min_replicas" {
 }
 
 variable "backend_max_replicas" {
-  description = "Bounded DEV maximum for backend replicas; raise only after database connection capacity and load tests justify it."
+  description = "Bounded DEV maximum for backend replicas; with four pooled connections per replica, the default caps one revision at 12 app database connections."
   type        = number
-  default     = 5
+  default     = 3
 
   validation {
     condition     = var.backend_max_replicas >= 1 && var.backend_max_replicas <= 10 && var.backend_max_replicas == floor(var.backend_max_replicas) && var.backend_max_replicas >= var.backend_min_replicas
