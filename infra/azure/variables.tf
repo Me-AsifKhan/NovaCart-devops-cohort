@@ -130,12 +130,21 @@ variable "frontend_image_tag" {
 }
 
 variable "container_cpu" {
-  description = "CPU allocation per app container in vCPU."
+  description = "CPU allocation per app container in vCPU. Keep paired with a supported Azure Container Apps Consumption memory size."
   type        = number
   default     = 0.5
   validation {
-    condition     = var.container_cpu >= 0.25 && var.container_cpu <= 2
-    error_message = "container_cpu must be between 0.25 and 2 vCPU."
+    condition = (
+      (var.container_cpu == 0.25 && var.container_memory == "0.5Gi") ||
+      (var.container_cpu == 0.5 && var.container_memory == "1Gi") ||
+      (var.container_cpu == 0.75 && var.container_memory == "1.5Gi") ||
+      (var.container_cpu == 1.0 && var.container_memory == "2Gi") ||
+      (var.container_cpu == 1.25 && var.container_memory == "2.5Gi") ||
+      (var.container_cpu == 1.5 && var.container_memory == "3Gi") ||
+      (var.container_cpu == 1.75 && var.container_memory == "3.5Gi") ||
+      (var.container_cpu == 2.0 && var.container_memory == "4Gi")
+    )
+    error_message = "Use a supported Consumption CPU/memory pair: 0.25/0.5Gi, 0.5/1Gi, 0.75/1.5Gi, 1/2Gi, 1.25/2.5Gi, 1.5/3Gi, 1.75/3.5Gi, or 2/4Gi."
   }
 }
 
