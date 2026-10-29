@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from prometheus_fastapi_instrumentator import Instrumentator
 
 app = FastAPI(title="NovaCart API", version="1.0.0")
 app.add_middleware(
@@ -19,6 +20,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Expose bounded-cardinality HTTP metrics for the local Prometheus scrape.
+# The /metrics handler itself is excluded to avoid scrape-generated traffic.
+Instrumentator(
+    should_group_status_codes=True,
+    should_ignore_untemplated=True,
+    excluded_handlers=["/metrics"],
+).instrument(app).expose(app, endpoint="/metrics", include_in_schema=False, should_gzip=True)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./novacart.db")
 APP_ENV = os.getenv("APP_ENV", "development")
