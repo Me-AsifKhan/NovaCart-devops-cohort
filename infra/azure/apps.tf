@@ -6,13 +6,18 @@ resource "azurerm_container_app" "backend" {
   name                         = "ca-${var.name_prefix}-backend"
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
-  revision_mode                = "Single"
+  revision_mode                = "Multiple"
   workload_profile_name        = "Consumption"
   tags                         = var.tags
 
   # After bootstrap, the delivery workflow owns image rollouts by digest.
+  # Release automation owns image rollouts and revision traffic after bootstrap.
+  # Ignore only these fields so Terraform does not reset an approved canary/promotion.
   lifecycle {
-    ignore_changes = [template[0].container[0].image]
+    ignore_changes = [
+      template[0].container[0].image,
+      ingress[0].traffic_weight,
+    ]
   }
 
   identity {
@@ -31,14 +36,52 @@ resource "azurerm_container_app" "backend" {
   }
 
   template {
-    # Keep one backend replica available for development verification.
-    min_replicas = 1
-    max_replicas = 2
+    # Keep one replica ready; scale up to five while the database is the main shared bottleneck.
+    # The HTTP threshold is a starting hypothesis and must be validated with a load test.
+    min_replicas = var.container_min_replicas
+    max_replicas = var.container_max_replicas
+
+    http_scale_rule {
+      name                = "http-concurrency"
+      concurrent_requests = tostring(var.http_concurrent_requests)
+    }
+
     container {
       name   = "novacart-backend"
       image  = "${azurerm_container_registry.this.login_server}/novacart-backend:${var.backend_image_tag}"
       cpu    = var.container_cpu
       memory = var.container_memory
+
+      # Process-level health: do not restart the app just because PostgreSQL is unavailable.
+      liveness_probe {
+        transport                 = "HTTP"
+        port                      = 8080
+        path                      = "/health"
+        interval_seconds          = 10
+        timeout                   = 3
+        failure_count_threshold   = 3
+      }
+
+      startup_probe {
+        transport                 = "HTTP"
+        port                      = 8080
+        path                      = "/health"
+        interval_seconds          = 5
+        timeout                   = 3
+        failure_count_threshold   = 24
+      }
+
+      # Readiness includes a database query; failed readiness removes this replica from traffic.
+      readiness_probe {
+        transport                 = "HTTP"
+        port                      = 8080
+        path                      = "/ready"
+        interval_seconds          = 5
+        timeout                   = 3
+        failure_count_threshold   = 3
+        success_count_threshold   = 1
+      }
+
       env {
         name        = "DATABASE_URL"
         secret_name = "database-url"
@@ -81,13 +124,18 @@ resource "azurerm_container_app" "frontend" {
   name                         = "ca-${var.name_prefix}-frontend"
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
-  revision_mode                = "Single"
+  revision_mode                = "Multiple"
   workload_profile_name        = "Consumption"
   tags                         = var.tags
 
   # After bootstrap, the delivery workflow owns image rollouts by digest.
+  # Release automation owns image rollouts and revision traffic after bootstrap.
+  # Ignore only these fields so Terraform does not reset an approved canary/promotion.
   lifecycle {
-    ignore_changes = [template[0].container[0].image]
+    ignore_changes = [
+      template[0].container[0].image,
+      ingress[0].traffic_weight,
+    ]
   }
 
   identity {
@@ -101,13 +149,48 @@ resource "azurerm_container_app" "frontend" {
   }
 
   template {
-    min_replicas = 1
-    max_replicas = 2
+    min_replicas = var.container_min_replicas
+    max_replicas = var.container_max_replicas
+
+    http_scale_rule {
+      name                = "http-concurrency"
+      concurrent_requests = tostring(var.http_concurrent_requests)
+    }
+
     container {
       name   = "novacart-frontend"
       image  = "${azurerm_container_registry.this.login_server}/novacart-frontend:${var.frontend_image_tag}"
       cpu    = var.container_cpu
       memory = var.container_memory
+
+      startup_probe {
+        transport               = "HTTP"
+        port                    = 80
+        path                    = "/"
+        interval_seconds        = 5
+        timeout                 = 3
+        failure_count_threshold = 12
+      }
+
+      liveness_probe {
+        transport               = "HTTP"
+        port                    = 80
+        path                    = "/"
+        interval_seconds        = 10
+        timeout                 = 3
+        failure_count_threshold = 3
+      }
+
+      readiness_probe {
+        transport                 = "HTTP"
+        port                      = 80
+        path                      = "/"
+        interval_seconds          = 5
+        timeout                   = 3
+        failure_count_threshold   = 3
+        success_count_threshold   = 1
+      }
+
       env {
         name  = "BACKEND_FQDN"
         value = azurerm_container_app.backend[0].ingress[0].fqdn
