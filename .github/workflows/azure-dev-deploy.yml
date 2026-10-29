@@ -30,6 +30,7 @@ jobs:
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       ACR_NAME: ${{ vars.NOVACART_ACR_NAME }}
       AZURE_RESOURCE_GROUP: rg-novacart-dev
+      ACA_ENV_NAME: cae-novacart-dev
       BACKEND_APP_NAME: ca-novacart-dev-backend
       FRONTEND_APP_NAME: ca-novacart-dev-frontend
 
@@ -65,7 +66,7 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Verify DEV resources and log in to ACR
+      - name: Verify DEV resources and record the current release
         id: azure_preflight
         shell: bash
         run: |
@@ -78,8 +79,46 @@ jobs:
           az containerapp show --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --output none
           az containerapp show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --output none
 
+          backend_mode="$(az containerapp show --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.configuration.activeRevisionsMode" --output tsv)"
+          frontend_mode="$(az containerapp show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.configuration.activeRevisionsMode" --output tsv)"
+          if [[ "${backend_mode,,}" != "multiple" || "${frontend_mode,,}" != "multiple" ]]; then
+            echo "::error::Both apps must use Multiple revision mode from the reviewed Terraform configuration. No traffic was changed."
+            exit 1
+          fi
+
+          backend_traffic="$(az containerapp show --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.configuration.ingress.traffic" --output json)"
+          frontend_traffic="$(az containerapp show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.configuration.ingress.traffic" --output json)"
+          old_backend_revision="$(jq -er '[.[] | select(.weight == 100 and ((.revisionName // "") != "")) | .revisionName] | if length == 1 then .[0] else empty end' <<< "$backend_traffic")"
+          old_frontend_revision="$(jq -er '[.[] | select(.weight == 100 and ((.revisionName // "") != "")) | .revisionName] | if length == 1 then .[0] else empty end' <<< "$frontend_traffic")"
+
+          old_backend_image="$(az containerapp revision show --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$old_backend_revision" --query "properties.template.containers[?name=='novacart-backend'].image | [0]" --output tsv)"
+          old_frontend_image="$(az containerapp revision show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$old_frontend_revision" --query "properties.template.containers[?name=='novacart-frontend'].image | [0]" --output tsv)"
+          frontend_fqdn="$(az containerapp show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.configuration.ingress.fqdn" --output tsv)"
+          default_domain="$(az containerapp env show --name "$ACA_ENV_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.defaultDomain" --output tsv)"
+
+          : "${old_backend_image:?Could not identify previous backend image}"
+          : "${old_frontend_image:?Could not identify previous frontend image}"
+          : "${frontend_fqdn:?Could not identify frontend FQDN}"
+          : "${default_domain:?Could not identify Container Apps environment domain}"
+
           az acr login --name "$ACR_NAME"
-          echo "login_server=$login_server" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "login_server=$login_server"
+            echo "default_domain=$default_domain"
+            echo "frontend_url=https://$frontend_fqdn"
+            echo "old_backend_revision=$old_backend_revision"
+            echo "old_frontend_revision=$old_frontend_revision"
+            echo "old_backend_image=$old_backend_image"
+            echo "old_frontend_image=$old_frontend_image"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Pre-deployment state"
+            echo "- Backend revision/image: $old_backend_revision / $old_backend_image"
+            echo "- Frontend revision/image: $old_frontend_revision / $old_frontend_image"
+            echo "- Frontend URL: https://$frontend_fqdn"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -100,57 +139,198 @@ jobs:
           push: true
           tags: ${{ steps.azure_preflight.outputs.login_server }}/novacart-frontend:${{ github.sha }}
 
-      - name: Deploy image digests to Azure Container Apps
+      - name: Roll out revisions with health-gated cutover and rollback
         id: deploy_images
         shell: bash
         env:
           ACR_LOGIN_SERVER: ${{ steps.azure_preflight.outputs.login_server }}
+          ACA_DEFAULT_DOMAIN: ${{ steps.azure_preflight.outputs.default_domain }}
+          FRONTEND_URL: ${{ steps.azure_preflight.outputs.frontend_url }}
+          OLD_BACKEND_REVISION: ${{ steps.azure_preflight.outputs.old_backend_revision }}
+          OLD_FRONTEND_REVISION: ${{ steps.azure_preflight.outputs.old_frontend_revision }}
+          OLD_BACKEND_IMAGE: ${{ steps.azure_preflight.outputs.old_backend_image }}
+          OLD_FRONTEND_IMAGE: ${{ steps.azure_preflight.outputs.old_frontend_image }}
           BACKEND_DIGEST: ${{ steps.build_backend.outputs.digest }}
           FRONTEND_DIGEST: ${{ steps.build_frontend.outputs.digest }}
         run: |
-          set -euo pipefail
-          : "${BACKEND_DIGEST:?Backend image digest was not produced}"
-          : "${FRONTEND_DIGEST:?Frontend image digest was not produced}"
+          set -Eeuo pipefail
 
-          backend_image="${ACR_LOGIN_SERVER}/novacart-backend@${BACKEND_DIGEST}"
-          frontend_image="${ACR_LOGIN_SERVER}/novacart-frontend@${FRONTEND_DIGEST}"
+          REVISION_SUFFIX="r${GITHUB_SHA:0:7}-${GITHUB_RUN_NUMBER}"
+          BACKEND_IMAGE="${ACR_LOGIN_SERVER}/novacart-backend@${BACKEND_DIGEST}"
+          FRONTEND_IMAGE="${ACR_LOGIN_SERVER}/novacart-frontend@${FRONTEND_DIGEST}"
+          NEW_BACKEND_REVISION="${BACKEND_APP_NAME}--${REVISION_SUFFIX}"
+          NEW_FRONTEND_REVISION="${FRONTEND_APP_NAME}--${REVISION_SUFFIX}"
+          CANDIDATE_FRONTEND_URL="https://${FRONTEND_APP_NAME}---candidate.${ACA_DEFAULT_DOMAIN}"
+          TRAFFIC_SHIFTED=false
+          PROMOTION_COMPLETE=false
 
-          # Deploy the backend first so the frontend targets the intended API version.
+          rollback_on_error() {
+            local exit_code="$1"
+            trap - ERR
+            set +e
+            echo "::error::Release validation failed. Restoring the previous known-good revisions."
+            {
+              echo
+              echo "### Rollout failure and rollback"
+              echo "- **Release suffix:** ${REVISION_SUFFIX}"
+              echo "- **Previous backend revision/image:** ${OLD_BACKEND_REVISION} / ${OLD_BACKEND_IMAGE}"
+              echo "- **Previous frontend revision/image:** ${OLD_FRONTEND_REVISION} / ${OLD_FRONTEND_IMAGE}"
+              echo "- **Failed candidate backend:** ${NEW_BACKEND_REVISION} (${BACKEND_IMAGE})"
+              echo "- **Failed candidate frontend:** ${NEW_FRONTEND_REVISION} (${FRONTEND_IMAGE})"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            if [[ "$TRAFFIC_SHIFTED" == "true" ]]; then
+              if az containerapp ingress traffic set \
+                --name "$BACKEND_APP_NAME" \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --revision-weight "${OLD_BACKEND_REVISION}=100" \
+                --output none; then
+                echo "- Backend traffic restored to `${OLD_BACKEND_REVISION}`." >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "::error::Could not restore backend traffic automatically; use the runbook and inspect the app now."
+                echo "- **Backend rollback:** FAILED — operator action required." >> "$GITHUB_STEP_SUMMARY"
+              fi
+
+              if az containerapp ingress traffic set \
+                --name "$FRONTEND_APP_NAME" \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --revision-weight "${OLD_FRONTEND_REVISION}=100" \
+                --output none; then
+                echo "- Frontend traffic restored to `${OLD_FRONTEND_REVISION}`." >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "::error::Could not restore frontend traffic automatically; use the runbook and inspect the app now."
+                echo "- **Frontend rollback:** FAILED — operator action required." >> "$GITHUB_STEP_SUMMARY"
+              fi
+            else
+              echo "- Production traffic was not changed before failure; the existing revisions remain the intended production targets." >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit "$exit_code"
+          }
+          trap 'rollback_on_error "$?"' ERR
+
+          wait_for_revision() {
+            local app_name="$1"
+            local revision_name="$2"
+            local attempt revision_json provisioning running health
+            for attempt in $(seq 1 40); do
+              revision_json="$(az containerapp revision show \
+                --name "$app_name" \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --revision "$revision_name" \
+                --output json)"
+              provisioning="$(jq -r '.properties.provisioningState // ""' <<< "$revision_json")"
+              running="$(jq -r '.properties.runningState // ""' <<< "$revision_json")"
+              health="$(jq -r '.properties.healthState // ""' <<< "$revision_json")"
+
+              if [[ "$provisioning" == "Failed" || "$health" == "Unhealthy" || "$running" == "Failed" ]]; then
+                echo "::error::Revision $revision_name did not become healthy: provisioning=$provisioning running=$running health=$health"
+                return 1
+              fi
+              if [[ "$provisioning" == "Provisioned" && "$running" == "Running" && ( -z "$health" || "$health" == "Healthy" ) ]]; then
+                echo "Revision $revision_name is provisioned and running (health=$health)."
+                return 0
+              fi
+              sleep 15
+            done
+            echo "::error::Timed out waiting for revision $revision_name; last state: provisioning=$provisioning running=$running health=$health"
+            return 1
+          }
+
+          smoke_test_frontend() {
+            local url="$1"
+            echo "Smoke-testing ${url}"
+            curl --fail --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors --max-time 15 "${url}/" -o /dev/null
+
+            local health ready products
+            health="$(curl --fail --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors --max-time 15 "${url}/api/health")"
+            jq -e '.status == "ok"' <<< "$health" > /dev/null
+
+            ready="$(curl --fail --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors --max-time 15 "${url}/api/ready")"
+            jq -e '.status == "ready"' <<< "$ready" > /dev/null
+
+            products="$(curl --fail --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors --max-time 15 "${url}/api/products")"
+            jq -e 'type == "array" and length >= 1' <<< "$products" > /dev/null
+            echo "Smoke tests passed for ${url}: frontend, API health, database readiness, and products."
+          }
+
+          {
+            echo "## NovaCart revision rollout"
+            echo
+            echo "- **Commit:** ${GITHUB_SHA}"
+            echo "- **Run:** ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo "- **Candidate suffix:** ${REVISION_SUFFIX}"
+            echo "- **Previous backend:** ${OLD_BACKEND_REVISION} (${OLD_BACKEND_IMAGE})"
+            echo "- **Previous frontend:** ${OLD_FRONTEND_REVISION} (${OLD_FRONTEND_IMAGE})"
+            echo "- **Candidate backend:** ${NEW_BACKEND_REVISION} (${BACKEND_IMAGE})"
+            echo "- **Candidate frontend:** ${NEW_FRONTEND_REVISION} (${FRONTEND_IMAGE})"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Create a candidate backend revision while the previous revision still owns 100% of traffic.
           az containerapp update \
             --name "$BACKEND_APP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
-            --image "$backend_image" \
+            --image "$BACKEND_IMAGE" \
+            --revision-suffix "$REVISION_SUFFIX" \
             --output none
+          wait_for_revision "$BACKEND_APP_NAME" "$NEW_BACKEND_REVISION"
 
+          # Backend is internal. Shift it only after the platform readiness probe passes,
+          # then test it through the still-stable public frontend. Any failure restores both apps.
+          TRAFFIC_SHIFTED=true
+          az containerapp ingress traffic set \
+            --name "$BACKEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --revision-weight "${NEW_BACKEND_REVISION}=100" \
+            --output none
+          smoke_test_frontend "$FRONTEND_URL"
+
+          # Create the frontend candidate without changing production frontend traffic.
           az containerapp update \
             --name "$FRONTEND_APP_NAME" \
             --resource-group "$AZURE_RESOURCE_GROUP" \
-            --image "$frontend_image" \
+            --image "$FRONTEND_IMAGE" \
+            --revision-suffix "$REVISION_SUFFIX" \
             --output none
+          wait_for_revision "$FRONTEND_APP_NAME" "$NEW_FRONTEND_REVISION"
 
-          # Verify that Azure reports the exact digest-based image configured for each app.
-          for attempt in $(seq 1 12); do
-            actual_backend="$(az containerapp show --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[?name=='novacart-backend'].image | [0]" --output tsv)"
-            actual_frontend="$(az containerapp show --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "properties.template.containers[?name=='novacart-frontend'].image | [0]" --output tsv)"
-            if [[ "$actual_backend" == "$backend_image" && "$actual_frontend" == "$frontend_image" ]]; then
-              break
-            fi
-            if [[ "$attempt" -eq 12 ]]; then
-              echo "::error::Azure did not report the expected image digests after the update."
-              echo "Backend image: $actual_backend"
-              echo "Frontend image: $actual_frontend"
-              exit 1
-            fi
-            sleep 5
-          done
+          # A revision label gives the candidate a dedicated URL while production still uses the old revision.
+          az containerapp revision label add \
+            --name "$FRONTEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --label candidate \
+            --revision "$NEW_FRONTEND_REVISION" \
+            --no-prompt --yes
+          smoke_test_frontend "$CANDIDATE_FRONTEND_URL"
 
-          backend_revision="$(az containerapp revision list --name "$BACKEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "[?properties.active == `true`].name | [0]" --output tsv)"
-          frontend_revision="$(az containerapp revision list --name "$FRONTEND_APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query "[?properties.active == `true`].name | [0]" --output tsv)"
+          # The candidate passed its own smoke tests. Cut over frontend traffic and verify again.
+          az containerapp ingress traffic set \
+            --name "$FRONTEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --revision-weight "${NEW_FRONTEND_REVISION}=100" \
+            --output none
+          smoke_test_frontend "$FRONTEND_URL"
 
-          echo "backend_image=$backend_image" >> "$GITHUB_OUTPUT"
-          echo "frontend_image=$frontend_image" >> "$GITHUB_OUTPUT"
-          echo "backend_revision=$backend_revision" >> "$GITHUB_OUTPUT"
-          echo "frontend_revision=$frontend_revision" >> "$GITHUB_OUTPUT"
+          PROMOTION_COMPLETE=true
+          {
+            echo
+            echo "### Promotion result"
+            echo "- **Status:** SUCCESS"
+            echo "- **Backend traffic target:** ${NEW_BACKEND_REVISION}"
+            echo "- **Backend image:** ${BACKEND_IMAGE}"
+            echo "- **Frontend traffic target:** ${NEW_FRONTEND_REVISION}"
+            echo "- **Frontend image:** ${FRONTEND_IMAGE}"
+            echo "- **Validation:** candidate frontend and post-cutover frontend/API health/readiness/products checks passed."
+            echo "- **Rollback target retained:** ${OLD_BACKEND_REVISION} and ${OLD_FRONTEND_REVISION}, recorded above."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "backend_image=$BACKEND_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "frontend_image=$FRONTEND_IMAGE" >> "$GITHUB_OUTPUT"
+          echo "backend_revision=$NEW_BACKEND_REVISION" >> "$GITHUB_OUTPUT"
+          echo "frontend_revision=$NEW_FRONTEND_REVISION" >> "$GITHUB_OUTPUT"
+          echo "old_backend_revision=$OLD_BACKEND_REVISION" >> "$GITHUB_OUTPUT"
+          echo "old_frontend_revision=$OLD_FRONTEND_REVISION" >> "$GITHUB_OUTPUT"
+          echo "release_suffix=$REVISION_SUFFIX" >> "$GITHUB_OUTPUT"
+          trap - ERR
 
       - name: Publish deployment summary
         if: always()
