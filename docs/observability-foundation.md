@@ -10,7 +10,7 @@ NovaCart should be diagnosable through a small set of useful logs, health checks
 
 The repository now includes an optional local telemetry stack in `novacart/compose.yaml`:
 
-- FastAPI exposes `/metrics` using the pinned `prometheus-fastapi-instrumentator` library. The metrics endpoint is excluded from instrumentation to avoid scrape-generated request metrics, and untemplated routes are ignored to limit label cardinality.
+- FastAPI exposes `/metrics` using the pinned official `prometheus-client` library and a small middleware. The metrics endpoint is excluded from request metrics, route templates are used instead of raw paths, and unknown paths are grouped as `unmatched` to limit label cardinality.
 - Prometheus scrapes `backend:8080/metrics` every 15 seconds and retains local time series for three days.
 - Grafana provisions a Prometheus data source and a dashboard for request rate, 5xx ratio, p95 latency, and scrape availability.
 - Prometheus evaluates two local alert rules: the backend target is unavailable for one minute, or the 5xx ratio exceeds 5% for three minutes with at least 20 requests in the five-minute window.
