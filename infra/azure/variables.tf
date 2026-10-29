@@ -205,6 +205,17 @@ variable "frontend_max_replicas" {
   }
 }
 
+variable "database_pool_max_size" {
+  description = "Maximum PostgreSQL connections per backend replica. Size the total pool budget against PostgreSQL limits and the temporary two-revision rollout overlap."
+  type        = number
+  default     = 4
+
+  validation {
+    condition     = var.database_pool_max_size >= 1 && var.database_pool_max_size <= 8 && var.database_pool_max_size == floor(var.database_pool_max_size)
+    error_message = "database_pool_max_size must be an integer between 1 and 8."
+  }
+}
+
 variable "backend_http_concurrency_target" {
   description = "HTTP concurrent-request target per backend replica. Initial starting point only; tune after load testing and PostgreSQL connection-capacity review."
   type        = number
