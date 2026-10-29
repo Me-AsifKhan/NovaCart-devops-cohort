@@ -11,7 +11,8 @@ resource "azurerm_container_app" "backend" {
   workload_profile_name        = "Consumption"
   tags                         = var.tags
 
-  # After bootstrap, the delivery workflow owns image rollouts by digest.
+  # Multiple revisions allow a candidate to be validated before traffic cutover.
+  # The delivery workflow owns image rollouts by digest after bootstrap.
   lifecycle {
     # Terraform owns baseline app config; the release workflow owns revision images/suffixes and traffic weights.
     ignore_changes = [
@@ -37,14 +38,14 @@ resource "azurerm_container_app" "backend" {
   }
 
   template {
-    # Bootstrap revision is pinned until the release workflow promotes a verified revision.
+    # The pinned bootstrap revision receives traffic until a candidate passes readiness checks.
     revision_suffix = "bootstrap"
-    # DEV limits: bounded HTTP scale-out; zero minimum keeps the intentionally idle lab inexpensive.
-    min_replicas = 0
-    max_replicas = 5
+    # Keep one warm backend replica; cap the DEV ceiling until database load is measured.
+    min_replicas = var.backend_min_replicas
+    max_replicas = var.backend_max_replicas
     http_scale_rule {
       name                = "http-concurrency"
-      concurrent_requests = "25"
+      concurrent_requests = tostring(var.backend_http_concurrency_target)
     }
     container {
       name   = "novacart-backend"
@@ -152,12 +153,12 @@ resource "azurerm_container_app" "frontend" {
 
   template {
     revision_suffix = "bootstrap"
-    # Frontend is stateless and cheaper to scale out; bound it while testing growth.
-    min_replicas = 0
-    max_replicas = 10
+    # The frontend is stateless; scale by HTTP concurrency with a bounded DEV maximum.
+    min_replicas = var.frontend_min_replicas
+    max_replicas = var.frontend_max_replicas
     http_scale_rule {
       name                = "http-concurrency"
-      concurrent_requests = "50"
+      concurrent_requests = tostring(var.frontend_http_concurrency_target)
     }
     container {
       name   = "novacart-frontend"
