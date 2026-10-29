@@ -2,6 +2,7 @@ import os
 import logging
 import sqlite3
 import sys
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -47,6 +48,7 @@ async def collect_request_metrics(request: Request, call_next):
     try:
         response = await call_next(request)
         status_code = response.status_code
+        response.headers["X-NovaCart-Revision"] = APP_RELEASE_REVISION
         return response
     finally:
         route = request.scope.get("route")
@@ -66,6 +68,9 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./novacart.db")
 APP_ENV = os.getenv("APP_ENV", "development")
 API_VERSION = os.getenv("API_VERSION", "v1")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+APP_RELEASE_REVISION = os.getenv("CONTAINER_APP_REVISION", "local")
+
+DATABASE_POOL_MAX_SIZE = int(os.getenv("DATABASE_POOL_MAX_SIZE", "4"))
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -73,6 +78,49 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger("novacart")
+
+_postgres_pool = None
+_postgres_pool_lock = threading.Lock()
+
+
+def _get_postgres_pool():
+    """Create one bounded, thread-safe PostgreSQL pool per application process."""
+    global _postgres_pool
+    if _postgres_pool is None:
+        with _postgres_pool_lock:
+            if _postgres_pool is None:
+                from psycopg_pool import ConnectionPool
+
+                if not 1 <= DATABASE_POOL_MAX_SIZE <= 8:
+                    raise RuntimeError("DATABASE_POOL_MAX_SIZE must be between 1 and 8")
+
+                _postgres_pool = ConnectionPool(
+                    conninfo=DATABASE_URL,
+                    min_size=1,
+                    max_size=DATABASE_POOL_MAX_SIZE,
+                    timeout=5,
+                    max_waiting=100,
+                    kwargs={"connect_timeout": 5},
+                    reconnect_timeout=10,
+                    open=True,
+                    name="novacart-postgres",
+                )
+                logger.info(
+                    "event=database_pool_created min_size=1 max_size=%s",
+                    DATABASE_POOL_MAX_SIZE,
+                )
+    return _postgres_pool
+
+
+def _close_postgres_pool():
+    """Close pooled connections during graceful application shutdown."""
+    global _postgres_pool
+    if _postgres_pool is not None:
+        _postgres_pool.close(timeout=5)
+        _postgres_pool = None
+
+
+app.add_event_handler("shutdown", _close_postgres_pool)
 
 PRODUCTS = [
     (1, "DevOps Hoodie", 59.00),
@@ -123,9 +171,7 @@ def _open_connection():
             conn.close()
         return
 
-    import psycopg
-
-    with psycopg.connect(DATABASE_URL) as conn:
+    with _get_postgres_pool().connection(timeout=5) as conn:
         yield conn
 
 

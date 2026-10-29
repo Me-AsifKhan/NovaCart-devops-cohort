@@ -6,13 +6,20 @@ resource "azurerm_container_app" "backend" {
   name                         = "ca-${var.name_prefix}-backend"
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
-  revision_mode                = "Single"
+  revision_mode                = "Multiple"
+  max_inactive_revisions       = 10
   workload_profile_name        = "Consumption"
   tags                         = var.tags
 
-  # After bootstrap, the delivery workflow owns image rollouts by digest.
+  # Multiple revisions allow a candidate to be validated before traffic cutover.
+  # The delivery workflow owns image rollouts by digest after bootstrap.
   lifecycle {
-    ignore_changes = [template[0].container[0].image]
+    # Terraform owns baseline app config; the release workflow owns revision images/suffixes and traffic weights.
+    ignore_changes = [
+      template[0].container[0].image,
+      template[0].revision_suffix,
+      ingress[0].traffic_weight,
+    ]
   }
 
   identity {
@@ -31,14 +38,52 @@ resource "azurerm_container_app" "backend" {
   }
 
   template {
-    # Keep one backend replica available for development verification.
-    min_replicas = 1
-    max_replicas = 2
+    # The pinned bootstrap revision receives traffic until a candidate passes readiness checks.
+    revision_suffix = "bootstrap"
+    # Keep one warm backend replica; cap the DEV ceiling until database load is measured.
+    min_replicas = var.backend_min_replicas
+    max_replicas = var.backend_max_replicas
+    http_scale_rule {
+      name                = "http-concurrency"
+      concurrent_requests = tostring(var.backend_http_concurrency_target)
+    }
     container {
       name   = "novacart-backend"
       image  = "${azurerm_container_registry.this.login_server}/novacart-backend:${var.backend_image_tag}"
       cpu    = var.container_cpu
       memory = var.container_memory
+
+      startup_probe {
+        transport               = "HTTP"
+        path                    = "/health"
+        port                    = 8080
+        initial_delay           = 5
+        interval_seconds        = 5
+        timeout                 = 3
+        failure_count_threshold = 24
+      }
+
+      readiness_probe {
+        transport               = "HTTP"
+        path                    = "/ready"
+        port                    = 8080
+        initial_delay           = 5
+        interval_seconds        = 10
+        timeout                 = 3
+        failure_count_threshold = 3
+        success_count_threshold = 1
+      }
+
+      liveness_probe {
+        transport               = "HTTP"
+        path                    = "/health"
+        port                    = 8080
+        initial_delay           = 10
+        interval_seconds        = 10
+        timeout                 = 3
+        failure_count_threshold = 3
+      }
+
       env {
         name        = "DATABASE_URL"
         secret_name = "database-url"
@@ -55,6 +100,10 @@ resource "azurerm_container_app" "backend" {
         name  = "LOG_LEVEL"
         value = "INFO"
       }
+      env {
+        name  = "DATABASE_POOL_MAX_SIZE"
+        value = tostring(var.database_pool_max_size)
+      }
     }
   }
 
@@ -66,7 +115,7 @@ resource "azurerm_container_app" "backend" {
 
     traffic_weight {
       percentage      = 100
-      latest_revision = true
+      revision_suffix = "bootstrap"
     }
   }
 
@@ -81,13 +130,19 @@ resource "azurerm_container_app" "frontend" {
   name                         = "ca-${var.name_prefix}-frontend"
   container_app_environment_id = azurerm_container_app_environment.this.id
   resource_group_name          = azurerm_resource_group.this.name
-  revision_mode                = "Single"
+  revision_mode                = "Multiple"
+  max_inactive_revisions       = 10
   workload_profile_name        = "Consumption"
   tags                         = var.tags
 
   # After bootstrap, the delivery workflow owns image rollouts by digest.
   lifecycle {
-    ignore_changes = [template[0].container[0].image]
+    # Terraform owns baseline app config; the release workflow owns revision images/suffixes and traffic weights.
+    ignore_changes = [
+      template[0].container[0].image,
+      template[0].revision_suffix,
+      ingress[0].traffic_weight,
+    ]
   }
 
   identity {
@@ -101,13 +156,51 @@ resource "azurerm_container_app" "frontend" {
   }
 
   template {
-    min_replicas = 1
-    max_replicas = 2
+    revision_suffix = "bootstrap"
+    # The frontend is stateless; scale by HTTP concurrency with a bounded DEV maximum.
+    min_replicas = var.frontend_min_replicas
+    max_replicas = var.frontend_max_replicas
+    http_scale_rule {
+      name                = "http-concurrency"
+      concurrent_requests = tostring(var.frontend_http_concurrency_target)
+    }
     container {
       name   = "novacart-frontend"
       image  = "${azurerm_container_registry.this.login_server}/novacart-frontend:${var.frontend_image_tag}"
       cpu    = var.container_cpu
       memory = var.container_memory
+
+      startup_probe {
+        transport               = "HTTP"
+        path                    = "/"
+        port                    = 80
+        initial_delay           = 2
+        interval_seconds        = 5
+        timeout                 = 3
+        failure_count_threshold = 12
+      }
+
+      readiness_probe {
+        transport               = "HTTP"
+        path                    = "/"
+        port                    = 80
+        initial_delay           = 2
+        interval_seconds        = 10
+        timeout                 = 3
+        failure_count_threshold = 3
+        success_count_threshold = 1
+      }
+
+      liveness_probe {
+        transport               = "HTTP"
+        path                    = "/"
+        port                    = 80
+        initial_delay           = 10
+        interval_seconds        = 10
+        timeout                 = 3
+        failure_count_threshold = 3
+      }
+
       env {
         name  = "BACKEND_FQDN"
         value = azurerm_container_app.backend[0].ingress[0].fqdn
@@ -127,7 +220,7 @@ resource "azurerm_container_app" "frontend" {
 
     traffic_weight {
       percentage      = 100
-      latest_revision = true
+      revision_suffix = "bootstrap"
     }
   }
 

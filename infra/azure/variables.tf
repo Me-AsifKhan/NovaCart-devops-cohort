@@ -130,12 +130,21 @@ variable "frontend_image_tag" {
 }
 
 variable "container_cpu" {
-  description = "CPU allocation per app container in vCPU."
+  description = "CPU allocation per app container in vCPU. Keep paired with a supported Azure Container Apps Consumption memory size."
   type        = number
   default     = 0.5
   validation {
-    condition     = var.container_cpu >= 0.25 && var.container_cpu <= 2
-    error_message = "container_cpu must be between 0.25 and 2 vCPU."
+    condition = (
+      (var.container_cpu == 0.25 && var.container_memory == "0.5Gi") ||
+      (var.container_cpu == 0.5 && var.container_memory == "1Gi") ||
+      (var.container_cpu == 0.75 && var.container_memory == "1.5Gi") ||
+      (var.container_cpu == 1.0 && var.container_memory == "2Gi") ||
+      (var.container_cpu == 1.25 && var.container_memory == "2.5Gi") ||
+      (var.container_cpu == 1.5 && var.container_memory == "3Gi") ||
+      (var.container_cpu == 1.75 && var.container_memory == "3.5Gi") ||
+      (var.container_cpu == 2.0 && var.container_memory == "4Gi")
+    )
+    error_message = "Use a supported Consumption CPU/memory pair: 0.25/0.5Gi, 0.5/1Gi, 0.75/1.5Gi, 1/2Gi, 1.25/2.5Gi, 1.5/3Gi, 1.75/3.5Gi, or 2/4Gi."
   }
 }
 
@@ -149,4 +158,81 @@ variable "app_environment" {
   description = "Application environment name."
   type        = string
   default     = "development"
+}
+
+variable "backend_min_replicas" {
+  description = "Minimum backend replicas per active revision. A value of 1 avoids scale-from-zero latency; costs more during a release while old and new revisions overlap."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.backend_min_replicas >= 0 && var.backend_min_replicas <= 10 && var.backend_min_replicas == floor(var.backend_min_replicas)
+    error_message = "backend_min_replicas must be an integer between 0 and 10."
+  }
+}
+
+variable "backend_max_replicas" {
+  description = "Bounded DEV maximum for backend replicas; with four pooled connections per replica, the default caps one revision at 12 app database connections."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.backend_max_replicas >= 1 && var.backend_max_replicas <= 10 && var.backend_max_replicas == floor(var.backend_max_replicas) && var.backend_max_replicas >= var.backend_min_replicas
+    error_message = "backend_max_replicas must be an integer from backend_min_replicas through 10."
+  }
+}
+
+variable "frontend_min_replicas" {
+  description = "Minimum frontend replicas per active revision; one warm replica avoids cold-start latency and increases temporary blue/green release cost."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.frontend_min_replicas >= 0 && var.frontend_min_replicas <= 10 && var.frontend_min_replicas == floor(var.frontend_min_replicas)
+    error_message = "frontend_min_replicas must be an integer between 0 and 10."
+  }
+}
+
+variable "frontend_max_replicas" {
+  description = "Bounded DEV maximum for stateless Nginx frontend replicas."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.frontend_max_replicas >= 1 && var.frontend_max_replicas <= 10 && var.frontend_max_replicas == floor(var.frontend_max_replicas) && var.frontend_max_replicas >= var.frontend_min_replicas
+    error_message = "frontend_max_replicas must be an integer from frontend_min_replicas through 10."
+  }
+}
+
+variable "database_pool_max_size" {
+  description = "Maximum PostgreSQL connections per backend replica. Size the total pool budget against PostgreSQL limits and the temporary two-revision rollout overlap."
+  type        = number
+  default     = 4
+
+  validation {
+    condition     = var.database_pool_max_size >= 1 && var.database_pool_max_size <= 8 && var.database_pool_max_size == floor(var.database_pool_max_size)
+    error_message = "database_pool_max_size must be an integer between 1 and 8."
+  }
+}
+
+variable "backend_http_concurrency_target" {
+  description = "HTTP concurrent-request target per backend replica. Initial starting point only; tune after load testing and PostgreSQL connection-capacity review."
+  type        = number
+  default     = 25
+
+  validation {
+    condition     = var.backend_http_concurrency_target >= 1 && var.backend_http_concurrency_target <= 1000
+    error_message = "backend_http_concurrency_target must be between 1 and 1000."
+  }
+}
+
+variable "frontend_http_concurrency_target" {
+  description = "HTTP concurrent-request target per frontend replica. Initial starting point only; tune after load testing."
+  type        = number
+  default     = 50
+
+  validation {
+    condition     = var.frontend_http_concurrency_target >= 1 && var.frontend_http_concurrency_target <= 1000
+    error_message = "frontend_http_concurrency_target must be between 1 and 1000."
+  }
 }
