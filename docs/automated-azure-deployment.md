@@ -8,15 +8,17 @@ The workflow is `.github/workflows/azure-dev-deploy.yml`. It complements, rather
 
 ## Delivery flow
 
-1. An application change merges into `main`. GitHub branch protection is expected to require the existing `NovaCart Verification Suite` before the merge.
-2. GitHub Actions checks out the merged commit and authenticates to Azure with the `azure-development` environment's OIDC identity. No client secret is placed in YAML.
-3. The workflow checks that the development resource group, ACR, and both Container Apps already exist. It fails early if these prerequisites or the identity's permissions are missing.
-4. Docker Buildx builds the backend from `novacart/backend` and the frontend from `novacart/frontend`.
-5. Both images are pushed to ACR with the source commit SHA as a traceable tag. The workflow captures each registry digest.
-6. The backend and then the frontend are updated to use digest references (`image@sha256:...`), not a mutable `latest` tag.
-7. The workflow verifies that Azure reports the requested image references and writes the source commit, image digests, active revisions, and run link to the GitHub Actions summary.
+1. An application change merges into `main`. GitHub branch protection is expected to require the `NovaCart Verification Suite` before the merge.
+2. GitHub Actions checks out the merged commit and authenticates to Azure with the `azure-development` environment's OIDC identity. No Azure client secret is stored in YAML.
+3. Preflight confirms the Resource Group, ACR, both Container Apps, **Multiple** revision mode, the current 100%-traffic revisions and their image references. It smoke-tests the current release before creating candidates. If these assumptions are not met, the workflow fails without changing traffic.
+4. Docker Buildx builds the backend and frontend, tags each image with the source commit SHA, and records the immutable registry digests.
+5. A uniquely suffixed backend candidate is created while the old frontend remains stable. The workflow waits for its startup/readiness/liveness health to be good, routes backend traffic to it, and smoke-tests the API through the existing frontend.
+6. A uniquely suffixed frontend candidate is created with no production frontend traffic. The workflow assigns the `candidate` revision label and tests its dedicated label URL for the homepage, API health, database readiness and products.
+7. Only after candidate tests pass does the workflow switch the main frontend ingress to the candidate. It repeats the smoke tests on the production URL.
+8. On a failure after traffic starts to move, the workflow attempts to restore both recorded previous revisions. It fails the run even if rollback succeeds and writes a summary showing old/candidate revisions, image digests, smoke test outcome and rollback result.
+9. On success, old revisions are deactivated to stop their replicas; their revision history is retained subject to the configured inactive-revision limit.
 
-The workflow also supports `workflow_dispatch` for a controlled manual rerun from `main`. It does not run Terraform and does not create Azure infrastructure.
+The workflow also supports `workflow_dispatch` for a controlled manual run from `main`. It does not run Terraform or create Azure infrastructure. The workflow requires the Apps to have been created from the reviewed multiple-revision Terraform configuration; it deliberately fails closed if it detects a single-revision app or cannot identify the previous 100%-traffic revision.
 
 ## Existing infrastructure expected
 
@@ -86,15 +88,17 @@ The deployed image should contain the expected digest and correspond to the comm
 
 - Delivery is limited to pushes to `main` affecting the frontend, backend, or this workflow; manual runs must use `main`.
 - The workflow has read-only GitHub repository permissions and OIDC login; it does not use a stored Azure client secret.
-- Image tags contain the source commit SHA, and deployments use image digests.
-- The workflow does not run Terraform, create/delete Azure infrastructure, modify database schema, or implement automatic rollback.
-- The backend is updated before the frontend. If one service updates and the second fails, inspect the run and both app revisions before retrying or manually restoring the prior image digest.
+- Image tags contain the source commit SHA, deployments use immutable digests, and each revision receives a unique suffix.
+- The workflow does not run Terraform or create/delete Azure infrastructure.
+- The backend is promoted first and the old frontend is smoke-tested against it. The frontend candidate is then validated by label URL before the main frontend traffic is shifted.
+- Release changes must remain backward-compatible across the backend-first/frontend-second sequence. Database schema migrations need expand/migrate/contract discipline.
+- If automatic rollback fails for either app, the run summary marks the failed rollback leg and manual operator intervention is required.
 
 ## Current status and remaining prerequisites
 
-**Implemented in this ticket's workflow/documentation:** push-to-main trigger, OIDC authentication, early resource checks, frontend/backend image build and publish, digest-based rollout, post-update image verification, and a run summary.
+**Implemented in source configuration (DEVOPS-019 follow-up):** multiple revision mode, pinned bootstrap traffic, probes, HTTP scale rules, bounded replica and DB-pool settings, candidate-label smoke tests, traffic cutover, failure-triggered traffic rollback, release summary, and best-effort deactivation of previous revisions.
 
-**Not yet verified as a live delivery:** this depends on DEVOPS-013 provisioning the Azure development resources and on the deployment identity receiving the necessary ACR and Container Apps permissions. The earlier OIDC backend check and Terraform plan workflow do not demonstrate that these application resources exist or are deployed. Do not mark end-to-end delivery complete until an actual GitHub Actions run successfully publishes both images and verifies both deployed digests.
+**Not live-verified:** the Azure lab was deleted on 2026-10-29. This workflow cannot pass its resource preflight until the Azure runtime and role assignments are rebuilt. CI validates source/configuration; only a real deployment run can prove ACR publishing, candidate readiness, traffic cutover, rollback and live health checks.
 
 ## Cost notes
 
