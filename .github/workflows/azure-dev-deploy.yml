@@ -21,7 +21,7 @@ jobs:
   deploy:
     name: Build, Publish, and Deploy DEV
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment: azure-development
 
     env:
@@ -119,6 +119,18 @@ jobs:
             echo "- Frontend revision/image: $old_frontend_revision / $old_frontend_image"
             echo "- Frontend URL: https://$frontend_fqdn"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate the current stable release before building candidates
+        shell: bash
+        env:
+          FRONTEND_URL: ${{ steps.azure_preflight.outputs.frontend_url }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors --max-time 15 "${FRONTEND_URL}/" -o /dev/null
+          curl --fail --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors --max-time 15 "${FRONTEND_URL}/api/health" | jq -e '.status == "ok"' > /dev/null
+          curl --fail --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors --max-time 15 "${FRONTEND_URL}/api/ready" | jq -e '.status == "ready"' > /dev/null
+          curl --fail --silent --show-error --retry 4 --retry-delay 2 --retry-all-errors --max-time 15 "${FRONTEND_URL}/api/products" | jq -e 'type == "array" and length >= 1' > /dev/null
+          echo "The current stable frontend/API/database-readiness path passed before candidate creation." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
