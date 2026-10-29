@@ -311,6 +311,28 @@ jobs:
           smoke_test_frontend "$FRONTEND_URL"
 
           PROMOTION_COMPLETE=true
+          # The release is fully validated now. Cleanup is best-effort and must not undo a healthy promotion.
+          trap - ERR
+          if az containerapp revision deactivate \
+            --name "$BACKEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --revision "$OLD_BACKEND_REVISION" \
+            --output none; then
+            echo "Previous backend revision deactivated after successful validation." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Previous backend revision remains active at zero traffic; review temporary duplicate-replica cost."
+            echo "- **Cleanup warning:** previous backend revision may remain active with zero traffic." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if az containerapp revision deactivate \
+            --name "$FRONTEND_APP_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --revision "$OLD_FRONTEND_REVISION" \
+            --output none; then
+            echo "Previous frontend revision deactivated after successful validation." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Previous frontend revision remains active at zero traffic; review temporary duplicate-replica cost."
+            echo "- **Cleanup warning:** previous frontend revision may remain active with zero traffic." >> "$GITHUB_STEP_SUMMARY"
+          fi
           {
             echo
             echo "### Promotion result"
