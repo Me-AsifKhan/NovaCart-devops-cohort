@@ -84,4 +84,4 @@ That layout is valid for a small configuration. Moving resources into reusable c
 
 ## Ticket status
 
-See [DEVOPS ticket audit 007–020](docs/ticket-status-007-020.md). It distinguishes code/documentation delivered from cloud acceptance criteria that still require live evidence. The ticket 020 definition is included; the original DEVOPS-019 definition was not found in the public repository and should be obtained from the mentor rather than invented.
+See [DEVOPS ticket audit 007–020](docs/ticket-status-007-020.md). It distinguishes code/documentation delivered from cloud acceptance criteria that still require live evidence. The supplied DEVOPS-019 definition and implementation are in review; DEVOPS-020 is defined, with its rollback runbook still to be completed and live rollback evidence pending. See [the capacity and availability review](docs/production-capacity-and-availability-review.md), [the safe deployment guide](docs/safe-production-deployment.md), and [the ticket audit](docs/ticket-status-007-020.md).
